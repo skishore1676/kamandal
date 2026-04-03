@@ -1,0 +1,173 @@
+# Kamandal Configuration
+# Copy this file to config.yaml and fill in your values
+
+app:
+  name: kamandal
+  mode: dry_run  # dry_run | pending | live
+  log_level: INFO
+
+storage:
+  local:
+    sqlite_path: data/kamandal.db
+    audit_dir: data/audit
+
+# Broker API (execution integration TBD; current candidates include tastytrade, Public, and Schwab)
+broker:
+  active: tastytrade  # tastytrade | public | schwab
+
+  tastytrade:
+    username: ""
+    password: ""
+    account_id: ""
+    sandbox: true
+
+  public:
+    api_key: ""
+    account_id: ""
+
+# OpenAI (for Whisper transcription + LLM extraction/refinement)
+openai:
+  api_key: ""
+  model: gpt-4o
+  whisper_model: whisper-1
+
+# Google Sheets
+google_sheets:
+  credentials_file: config/google_credentials.json
+  spreadsheet_id: ""
+  sheets:
+    daily_ideas: daily_ideas
+    positions: positions
+    portfolio_snapshot: portfolio_snapshot
+    trade_log: trade_log
+    optimizer_decisions: optimizer_decisions
+    backtest_results: backtest_results
+
+# Backtesting
+backtesting:
+  data_source: polygon  # polygon | orats (phase 2)
+  polygon:
+    api_key: ""
+    # Free tier: 5 calls/min
+  lookback_years: 2
+  approval_thresholds:
+    min_win_rate: 0.65
+    min_sharpe: 0.8
+    max_drawdown_pct: 25.0
+
+# Portfolio Constraints (hard limits, enforced in code)
+portfolio:
+  constraints:
+    beta_weighted_delta_pct: [-5.0, 5.0]    # % of NLV
+    daily_theta_pct: [0.10, 0.30]           # % of NLV
+    max_gamma_ratio: 1.5                     # |gamma/theta| cap
+    max_vega_pct: 2.0                        # % of NLV
+    max_bpr_utilization_pct: 50.0
+    hard_bpr_cap_pct: 60.0                   # kill switch level
+    max_single_underlying_pct: 15.0          # % of BPR
+    max_sector_concentration_pct: 30.0
+    min_positions: 3                          # diversification floor
+    max_positions: 15                         # complexity cap
+
+  regimes:
+    high_iv:
+      prefer_structures: [short_strangle, short_put, iron_condor]
+      avoid_structures: []
+      allow_undefined_risk: true
+      min_iv_rank: 35
+      target_delta_bias: 0.5
+      reject_event_risk: true
+      notes:
+        - Favor premium selling when IV rank is elevated and constraints allow it.
+    normal_iv:
+      prefer_structures: [short_strangle, short_put, put_spread]
+      avoid_structures: []
+      allow_undefined_risk: true
+      min_iv_rank: 18
+      max_iv_rank: 34
+      target_delta_bias: 0.0
+      reject_event_risk: true
+      notes:
+        - Baseline tastylive-style premium selling regime.
+    low_iv:
+      prefer_structures: [put_spread, iron_condor]
+      avoid_structures: [short_strangle]
+      allow_undefined_risk: false
+      max_iv_rank: 17
+      target_delta_bias: 0.0
+      reject_event_risk: true
+      notes:
+        - Down-rank undefined-risk trades when premiums are thin.
+    event_risk:
+      prefer_structures: []
+      avoid_structures: [short_strangle, short_put, iron_condor]
+      allow_undefined_risk: false
+      target_delta_bias: 0.0
+      reject_event_risk: true
+      notes:
+        - Reject entries on symbols with near-term event risk or poor fixture quality.
+
+  # Optimizer scoring weights (tune over time)
+  optimizer_weights:
+    delta_improvement: 0.25
+    gamma_profile: 0.20
+    theta_improvement: 0.35
+    diversification: 0.20
+
+data_sources:
+  fixtures:
+    bundle_path: data/fixtures/fixture_bundle.json
+    replay_path: data/fixtures/replay_trades.json
+    import_gds_history_db: /Users/suman/kg_env/projects/public_api_trading_v3/gds_history.db
+    import_gds_analysis_json: /Users/suman/kg_env/projects/public_api_trading_v3/analysis/extracted_gds_data.json
+    public_seed_symbols: [SPY, IWM, QQQ]
+    enable_public_seed_fetch: true
+
+idea_sources:
+  youtube:
+    channel_ids: []
+    limit: 5
+  rss:
+    feed_urls: []
+    limit: 5
+  web:
+    urls: []
+  transcripts:
+    path: data/transcripts
+
+# Execution
+execution:
+  mode: pending  # pending | dry_run | live
+  order_type: limit
+  price_improvement_attempts: 3
+  price_step_cents: 1
+  fill_timeout_seconds: 120
+  max_slippage_pct: 2.0
+
+# Dry run
+dry_run:
+  duration_days: 7
+  auto_approve: false  # require human sign-off after dry run
+
+# Audio capture (Module 1)
+audio:
+  capture_device: default  # or specific device name
+  sample_rate: 16000
+  channels: 1
+
+# Notifications
+notifications:
+  slack:
+    enabled: false
+    webhook_url: ""
+  discord:
+    enabled: false
+    webhook_url: ""
+
+# Schedule (24h format, Eastern Time)
+schedule:
+  execution_window_start: "09:35"
+  execution_window_end: "15:45"
+  position_check_interval_minutes: 15
+  eod_reconciliation: "16:15"
+  portfolio_snapshot: "16:30"

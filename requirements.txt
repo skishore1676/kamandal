@@ -1,0 +1,34 @@
+# Kamandal - Python Dependencies
+
+# Core
+python-dotenv>=1.0.0
+pyyaml>=6.0
+
+# AI / LLM
+openai>=1.30.0
+
+# Google Sheets
+gspread>=6.0.0
+google-auth>=2.29.0
+google-auth-oauthlib>=1.2.0
+
+# Options / Finance
+numpy>=1.26.0
+pandas>=2.2.0
+scipy>=1.13.0
+# tastytrade>=8.0      # enable once broker is selected
+# py_vollib>=1.0.1     # optional: local Black-Scholes
+
+# Scheduling
+apscheduler>=3.10.4
+
+# Notifications
+requests>=2.31.0
+
+# Audio (Module 1 live capture)
+sounddevice>=0.4.6
+
+# Dev / Testing
+pytest>=8.0.0
+black>=24.0.0
+ruff>=0.3.0
