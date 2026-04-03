@@ -32,6 +32,7 @@ broker:
     api_requests_per_second: 5.0
     api_burst_limit: 5
     require_preflight: true
+    sync_portfolio_before_optimizer: true
     sync_portfolio_after_submission: true
 
 # OpenAI (for Whisper transcription + LLM extraction/refinement)

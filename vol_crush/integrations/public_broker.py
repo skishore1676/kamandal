@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -37,6 +38,21 @@ def _occ_symbol_from_leg(leg: OptionLeg) -> str:
     option_flag = "C" if leg.option_type.lower() == "call" else "P"
     strike_int = int(round(float(leg.strike) * 1000))
     return f"{leg.underlying.upper()}{yy_mm_dd}{option_flag}{strike_int:08d}"
+
+
+def parse_occ_symbol(option_symbol: str) -> dict[str, Any]:
+    """Parse a normalized OCC/OSI option symbol into components."""
+    match = re.match(r"^([A-Z.]+?)(\d{6})([CP])(\d{8})$", option_symbol.upper())
+    if not match:
+        raise ValueError(f"Unsupported OCC option symbol: {option_symbol}")
+    root, yymmdd, option_flag, strike_raw = match.groups()
+    expiration = f"20{yymmdd[:2]}-{yymmdd[2:4]}-{yymmdd[4:6]}"
+    return {
+        "underlying": root,
+        "expiration": expiration,
+        "option_type": "call" if option_flag == "C" else "put",
+        "strike": int(strike_raw) / 1000.0,
+    }
 
 
 def _invert_side(side: str) -> str:
@@ -271,7 +287,30 @@ class PublicBrokerAdapter:
 
     def get_option_greeks(self, option_symbol: str) -> dict[str, Any]:
         account_id = self.get_primary_account_id()
-        return self.client.get(f"/userapigateway/option-details/{account_id}/{option_symbol}/greeks")
+        payload = self.client.get(
+            f"/userapigateway/option-details/{account_id}/greeks",
+            params=[("osiSymbols", option_symbol)],
+        )
+        items = payload.get("greeks", []) or []
+        if items:
+            return items[0].get("greeks", {})
+        return {}
+
+    def get_option_greeks_batch(self, option_symbols: list[str]) -> dict[str, dict[str, Any]]:
+        if not option_symbols:
+            return {}
+        account_id = self.get_primary_account_id()
+        payload = self.client.get(
+            f"/userapigateway/option-details/{account_id}/greeks",
+            params=[("osiSymbols", symbol) for symbol in option_symbols],
+        )
+        result: dict[str, dict[str, Any]] = {}
+        for item in payload.get("greeks", []) or []:
+            symbol = item.get("symbol")
+            greeks = item.get("greeks", {})
+            if symbol:
+                result[str(symbol)] = greeks
+        return result
 
     def get_order(self, order_id: str) -> dict[str, Any]:
         account_id = self.get_primary_account_id()
@@ -411,4 +450,3 @@ class PublicBrokerAdapter:
 
             updated.append(order)
         return updated
-

@@ -17,6 +17,7 @@ from vol_crush.integrations.fixtures import (
 )
 from vol_crush.integrations.storage import build_local_store
 from vol_crush.optimizer.service import build_trade_plan
+from vol_crush.portfolio_sync.service import sync_public_portfolio
 from vol_crush.position_manager.service import evaluate_positions
 
 
@@ -58,6 +59,20 @@ def main() -> None:
     if not args.skip_backtest:
         results = run_backtests(config)
         logger.info("Backtest gate refreshed for %d strategies", len(results))
+
+    if (
+        config.get("broker", {}).get("active") == "public"
+        and config.get("broker", {}).get("public", {}).get("sync_portfolio_before_optimizer", True)
+    ):
+        try:
+            snapshot = sync_public_portfolio(config, store=store)
+            logger.info(
+                "Public portfolio sync complete: positions=%d nlv=%.2f",
+                snapshot.position_count,
+                snapshot.net_liquidation_value,
+            )
+        except Exception as exc:
+            logger.warning("Public portfolio sync failed; continuing with local state: %s", exc)
 
     plan = build_trade_plan(store, config, provider)
     store.save_trade_plan(plan)

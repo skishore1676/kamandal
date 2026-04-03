@@ -19,6 +19,7 @@ from vol_crush.core.models import (
 )
 from vol_crush.integrations.public_broker import PublicBrokerAdapter
 from vol_crush.integrations.storage import build_local_store
+from vol_crush.portfolio_sync.service import sync_public_portfolio
 
 logger = logging.getLogger("vol_crush.executor")
 
@@ -78,6 +79,11 @@ def execute_latest_plan(config: dict) -> list[PendingOrder]:
             adapter = PublicBrokerAdapter(config)
             orders = adapter.submit_pending_orders(orders)
             store.save_pending_orders(orders)
+            if config.get("broker", {}).get("public", {}).get("sync_portfolio_after_submission", True):
+                try:
+                    sync_public_portfolio(config, store=store, adapter=adapter)
+                except Exception as exc:
+                    logger.warning("Post-submission Public portfolio sync failed: %s", exc)
     return orders
 
 
