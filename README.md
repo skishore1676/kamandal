@@ -35,6 +35,9 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
+# Optional: bootstrap local env vars
+cp .env.example .env
+
 # Optional: copy config template for overrides
 cp config/config.example.yaml config/config.yaml
 
@@ -72,6 +75,10 @@ python -m vol_crush.main --skip-backtest
 # Or pull source content first, then run the daily dry-run pipeline
 python -m vol_crush.main --skip-backtest --fetch-sources transcripts
 ```
+
+If `broker.active` is set to `public`, `execution.mode=dry_run` or `pending`
+will use Public preflight/mock-style checks without placing live orders.
+`execution.mode=live` is the mode that submits broker orders.
 
 ## Project Structure
 

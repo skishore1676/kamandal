@@ -822,6 +822,13 @@ class PendingOrder:
     greeks_impact: Greeks
     notes: str = ""
     legs: list[OptionLeg] = field(default_factory=list)
+    broker: str = ""
+    execution_mode: str = ""
+    submitted_at: str = ""
+    broker_order_id: str = ""
+    broker_status: str = ""
+    broker_payload: dict[str, Any] = field(default_factory=dict)
+    broker_response: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -839,6 +846,13 @@ class PendingOrder:
             "greeks_impact": self.greeks_impact.to_dict(),
             "notes": self.notes,
             "legs": [leg.to_dict() for leg in self.legs],
+            "broker": self.broker,
+            "execution_mode": self.execution_mode,
+            "submitted_at": self.submitted_at,
+            "broker_order_id": self.broker_order_id,
+            "broker_status": self.broker_status,
+            "broker_payload": self.broker_payload,
+            "broker_response": self.broker_response,
         }
 
     @classmethod
@@ -859,6 +873,13 @@ class PendingOrder:
             greeks_impact=Greeks.from_dict(d.get("greeks_impact", {})),
             notes=d.get("notes", ""),
             legs=[OptionLeg.from_dict(item) for item in d.get("legs", [])],
+            broker=d.get("broker", ""),
+            execution_mode=d.get("execution_mode", ""),
+            submitted_at=d.get("submitted_at", ""),
+            broker_order_id=d.get("broker_order_id", ""),
+            broker_status=d.get("broker_status", ""),
+            broker_payload=dict(d.get("broker_payload", {})),
+            broker_response=dict(d.get("broker_response", {})),
         )
 
 

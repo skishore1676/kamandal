@@ -17,6 +17,7 @@ from vol_crush.core.models import (
     TradeAction,
     TradePlan,
 )
+from vol_crush.integrations.public_broker import PublicBrokerAdapter
 from vol_crush.integrations.storage import build_local_store
 
 logger = logging.getLogger("vol_crush.executor")
@@ -73,6 +74,10 @@ def execute_latest_plan(config: dict) -> list[PendingOrder]:
     orders = create_pending_orders(latest, snapshot, config)
     if orders:
         store.save_pending_orders(orders)
+        if config.get("broker", {}).get("active") == "public":
+            adapter = PublicBrokerAdapter(config)
+            orders = adapter.submit_pending_orders(orders)
+            store.save_pending_orders(orders)
     return orders
 
 

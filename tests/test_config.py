@@ -20,7 +20,7 @@ from vol_crush.core.config import (
 
 def test_load_config_from_example():
     """Config loader should fall back to config.example.yaml."""
-    config = load_config()
+    config = load_config(get_project_root() / "config" / "config.example.yaml")
     assert config["app"]["name"] == "kamandal"
     assert config["app"]["mode"] == "dry_run"
     assert "openai" in config
