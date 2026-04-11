@@ -24,24 +24,28 @@ def test_management_rules_defaults():
 
 
 def test_management_rules_from_dict():
-    rules = ManagementRules.from_dict({
-        "profit_target_pct": 25,
-        "max_loss_multiple": 1.5,
-        "roll_dte_trigger": 14,
-        "unknown_field": "ignored",
-    })
+    rules = ManagementRules.from_dict(
+        {
+            "profit_target_pct": 25,
+            "max_loss_multiple": 1.5,
+            "roll_dte_trigger": 14,
+            "unknown_field": "ignored",
+        }
+    )
     assert rules.profit_target_pct == 25
     assert rules.max_loss_multiple == 1.5
     assert rules.roll_dte_trigger == 14
 
 
 def test_strategy_filters_from_dict():
-    filters = StrategyFilters.from_dict({
-        "iv_rank_min": 30,
-        "dte_range": [30, 45],
-        "delta_range": [0.14, 0.18],
-        "underlyings": ["SPY", "IWM"],
-    })
+    filters = StrategyFilters.from_dict(
+        {
+            "iv_rank_min": 30,
+            "dte_range": [30, 45],
+            "delta_range": [0.14, 0.18],
+            "underlyings": ["SPY", "IWM"],
+        }
+    )
     assert filters.iv_rank_min == 30
     assert filters.dte_range == (30, 45)
     assert filters.delta_range == (0.14, 0.18)
@@ -49,10 +53,12 @@ def test_strategy_filters_from_dict():
 
 
 def test_strategy_allocation_from_dict():
-    alloc = StrategyAllocation.from_dict({
-        "max_bpr_pct": 40,
-        "max_positions": 10,
-    })
+    alloc = StrategyAllocation.from_dict(
+        {
+            "max_bpr_pct": 40,
+            "max_positions": 10,
+        }
+    )
     assert alloc.max_bpr_pct == 40
     assert alloc.max_positions == 10
     assert alloc.max_per_position_pct == 10.0  # default
@@ -134,4 +140,3 @@ def test_extracted_candidate_summary():
     assert "Tom" in s
     assert "Core Strangle" in s
     assert "short_strangle" in s
-

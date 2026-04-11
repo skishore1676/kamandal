@@ -73,7 +73,9 @@ def _open_close_indicator(action: TradeAction) -> str:
 class PublicBrokerSettings:
     secret_token: str = ""
     api_base_url: str = "https://api.public.com"
-    auth_endpoint: str = "https://api.public.com/userapiauthservice/personal/access-tokens"
+    auth_endpoint: str = (
+        "https://api.public.com/userapiauthservice/personal/access-tokens"
+    )
     account_id: str = ""
     session_file: str = "data/cache/public_session.json"
     account_cache_file: str = "data/cache/public_account.json"
@@ -92,9 +94,15 @@ class PublicBrokerSettings:
             auth_endpoint=str(payload.get("auth_endpoint", cls.auth_endpoint)),
             account_id=str(payload.get("account_id", "")),
             session_file=str(payload.get("session_file", cls.session_file)),
-            account_cache_file=str(payload.get("account_cache_file", cls.account_cache_file)),
-            token_validity_minutes=int(payload.get("token_validity_minutes", cls.token_validity_minutes)),
-            api_requests_per_second=float(payload.get("api_requests_per_second", cls.api_requests_per_second)),
+            account_cache_file=str(
+                payload.get("account_cache_file", cls.account_cache_file)
+            ),
+            token_validity_minutes=int(
+                payload.get("token_validity_minutes", cls.token_validity_minutes)
+            ),
+            api_requests_per_second=float(
+                payload.get("api_requests_per_second", cls.api_requests_per_second)
+            ),
             api_burst_limit=int(payload.get("api_burst_limit", cls.api_burst_limit)),
             require_preflight=bool(payload.get("require_preflight", True)),
             sync_portfolio_after_submission=bool(
@@ -119,14 +127,18 @@ class PublicRateLimiter:
     def acquire(self) -> None:
         now = time.time()
         elapsed = now - self.last_update
-        self.tokens = min(self.burst_limit, self.tokens + elapsed * self.requests_per_second)
+        self.tokens = min(
+            self.burst_limit, self.tokens + elapsed * self.requests_per_second
+        )
         self.last_update = now
         if self.tokens < 1.0:
             wait_time = (1.0 - self.tokens) / self.requests_per_second
             time.sleep(wait_time)
             now = time.time()
             elapsed = now - self.last_update
-            self.tokens = min(self.burst_limit, self.tokens + elapsed * self.requests_per_second)
+            self.tokens = min(
+                self.burst_limit, self.tokens + elapsed * self.requests_per_second
+            )
             self.last_update = now
         self.tokens = max(self.tokens - 1.0, 0.0)
 
@@ -175,7 +187,9 @@ class PublicApiClient:
         token = payload.get("accessToken")
         if not token:
             raise ValueError("Public auth response did not contain accessToken")
-        expires_in = int(payload.get("expiresIn", self.settings.token_validity_minutes * 60))
+        expires_in = int(
+            payload.get("expiresIn", self.settings.token_validity_minutes * 60)
+        )
         self._write_json(
             session_path,
             {
@@ -224,10 +238,14 @@ class PublicApiClient:
             return {}
         return response.json()
 
-    def get(self, endpoint: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def get(
+        self, endpoint: str, *, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         return self._request("GET", endpoint, params=params)
 
-    def post(self, endpoint: str, *, json_data: dict[str, Any] | None = None) -> dict[str, Any]:
+    def post(
+        self, endpoint: str, *, json_data: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         return self._request("POST", endpoint, json_data=json_data)
 
     def delete(self, endpoint: str) -> dict[str, Any]:
@@ -296,7 +314,9 @@ class PublicBrokerAdapter:
             return items[0].get("greeks", {})
         return {}
 
-    def get_option_greeks_batch(self, option_symbols: list[str]) -> dict[str, dict[str, Any]]:
+    def get_option_greeks_batch(
+        self, option_symbols: list[str]
+    ) -> dict[str, dict[str, Any]]:
         if not option_symbols:
             return {}
         account_id = self.get_primary_account_id()
@@ -318,7 +338,24 @@ class PublicBrokerAdapter:
 
     def cancel_order(self, order_id: str) -> dict[str, Any]:
         account_id = self.get_primary_account_id()
-        return self.client.delete(f"/userapigateway/trading/{account_id}/order/{order_id}")
+        return self.client.delete(
+            f"/userapigateway/trading/{account_id}/order/{order_id}"
+        )
+
+    @staticmethod
+    def _ensure_group_anchor(order: PendingOrder) -> str:
+        """Generate and stamp a durable client-supplied orderId on the PendingOrder.
+
+        Public's multi-leg order API requires a client-supplied UUID `orderId`
+        and is idempotent on retries using the same id. We generate it *before*
+        preflight or submission so the id is the durable group anchor that
+        ties the intended strategy bundle (PendingOrder) to whatever legs later
+        come back from portfolio_sync. Even if the network call fails, we still
+        have the anchor in the local store.
+        """
+        if not order.broker_order_id:
+            order.broker_order_id = str(uuid.uuid4())
+        return order.broker_order_id
 
     def _order_payload(self, order: PendingOrder, *, preflight: bool) -> dict[str, Any]:
         tif = str(self.execution_cfg.get("time_in_force", "DAY")).upper()
@@ -337,10 +374,10 @@ class PublicBrokerAdapter:
                 },
                 "orderSide": _public_side(order.action, leg),
                 "openCloseIndicator": _open_close_indicator(order.action),
+                "orderType": "LIMIT",
             }
-            payload["orderType" if preflight else "orderType"] = "LIMIT"
             if not preflight:
-                payload["orderId"] = str(uuid.uuid4())
+                payload["orderId"] = self._ensure_group_anchor(order)
             return payload
 
         legs = [
@@ -363,10 +400,12 @@ class PublicBrokerAdapter:
         }
         payload["orderType" if preflight else "type"] = "LIMIT"
         if not preflight:
-            payload["orderId"] = str(uuid.uuid4())
+            payload["orderId"] = self._ensure_group_anchor(order)
         return payload
 
-    def _preflight_order(self, order: PendingOrder) -> tuple[dict[str, Any], dict[str, Any]]:
+    def _preflight_order(
+        self, order: PendingOrder
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         account_id = self.get_primary_account_id()
         payload = self._order_payload(order, preflight=True)
         if len(order.legs) == 1:
@@ -381,7 +420,9 @@ class PublicBrokerAdapter:
             )
         return payload, response
 
-    def _place_order(self, order: PendingOrder) -> tuple[dict[str, Any], dict[str, Any]]:
+    def _place_order(
+        self, order: PendingOrder
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         account_id = self.get_primary_account_id()
         payload = self._order_payload(order, preflight=False)
         if len(order.legs) == 1:
@@ -404,6 +445,9 @@ class PublicBrokerAdapter:
         for order in orders:
             order.broker = "public"
             order.execution_mode = mode
+            # Stamp the durable group anchor up-front so even failed submissions and
+            # dry-run previews carry the same id the live order would have used.
+            self._ensure_group_anchor(order)
 
             if order.action in (TradeAction.ROLL, TradeAction.ADJUST):
                 order.notes = (
@@ -420,33 +464,49 @@ class PublicBrokerAdapter:
             try:
                 if mode == "live":
                     if self.settings.require_preflight:
-                        preflight_payload, preflight_response = self._preflight_order(order)
+                        preflight_payload, preflight_response = self._preflight_order(
+                            order
+                        )
                         order.broker_payload = preflight_payload
                         order.broker_response = preflight_response
                         order.broker_status = "PREFLIGHT_OK"
                     payload, response = self._place_order(order)
                     order.broker_payload = payload
                     order.broker_response = response
-                    order.broker_order_id = str(response.get("orderId", ""))
+                    # Prefer the client-supplied UUID we just stamped (Public is idempotent
+                    # on the client id and echoes it back). Only fall back to the response
+                    # id if for some reason the pre-stamp was lost.
+                    if not order.broker_order_id:
+                        order.broker_order_id = str(response.get("orderId", ""))
                     order.broker_status = str(response.get("status", "SUBMITTED"))
                     order.status = OrderStatus.PENDING.value
-                    order.submitted_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    order.submitted_at = time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                    )
                 else:
                     payload, response = self._preflight_order(order)
                     order.broker_payload = payload
                     order.broker_response = response
                     order.broker_status = "PREFLIGHT_OK"
                     order.status = (
-                        OrderStatus.DRY_RUN.value if mode == "dry_run" else OrderStatus.PENDING.value
+                        OrderStatus.DRY_RUN.value
+                        if mode == "dry_run"
+                        else OrderStatus.PENDING.value
                     )
-                    order.submitted_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    order.submitted_at = time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                    )
                     order.notes = (
                         f"{order.notes} Public preflight completed successfully."
                     ).strip()
             except Exception as exc:
-                logger.exception("Public broker submission failed for %s", order.pending_order_id)
+                logger.exception(
+                    "Public broker submission failed for %s", order.pending_order_id
+                )
                 order.broker_status = "ERROR"
-                order.notes = f"{order.notes} Public broker submission failed: {exc}".strip()
+                order.notes = (
+                    f"{order.notes} Public broker submission failed: {exc}".strip()
+                )
 
             updated.append(order)
         return updated

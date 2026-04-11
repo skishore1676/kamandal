@@ -92,7 +92,9 @@ def test_public_broker_preflights_multileg_orders_in_dry_run() -> None:
     assert order.broker_response["strategyName"] == "Iron Condor"
     assert order.broker_payload["orderType"] == "LIMIT"
     assert len(order.broker_payload["legs"]) == 4
-    assert order.broker_payload["legs"][0]["instrument"]["symbol"] == "AAPL260515P00180000"
+    assert (
+        order.broker_payload["legs"][0]["instrument"]["symbol"] == "AAPL260515P00180000"
+    )
 
 
 def test_public_broker_places_multileg_orders_in_live_mode() -> None:
@@ -103,7 +105,28 @@ def test_public_broker_places_multileg_orders_in_live_mode() -> None:
 
     order = submitted[0]
     assert order.status == "pending"
-    assert order.broker_order_id == "ord_live_123"
+    # Client-supplied orderId is the durable group anchor; Public echoes it back and
+    # our submitter should never overwrite it with the fake response id.
+    assert order.broker_order_id
+    assert order.broker_order_id != "ord_live_123"
+    assert order.broker_payload["orderId"] == order.broker_order_id
     assert order.broker_payload["type"] == "LIMIT"
-    assert any(endpoint.endswith("/preflight/multi-leg") for endpoint, _ in client.posts)
+    assert any(
+        endpoint.endswith("/preflight/multi-leg") for endpoint, _ in client.posts
+    )
     assert any(endpoint.endswith("/order/multileg") for endpoint, _ in client.posts)
+
+
+def test_public_broker_stamps_anchor_before_dry_run_preflight() -> None:
+    adapter = PublicBrokerAdapter(_config("dry_run"), client=FakePublicClient())
+
+    submitted = adapter.submit_pending_orders([_multi_leg_order()])
+    order = submitted[0]
+
+    # Even in dry_run, the group anchor must be stamped so the PendingOrder
+    # can later be matched to raw broker legs if the order is later resubmitted live.
+    assert order.broker_order_id
+    # Preflight payloads never include orderId — Public rejects that field at the
+    # preflight endpoint — so the payload on disk won't carry it, but the anchor
+    # must still live on the PendingOrder itself.
+    assert "orderId" not in order.broker_payload

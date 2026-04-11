@@ -81,4 +81,3 @@ def build_strategy_objects(strategies_raw: list[dict[str, Any]]) -> list[Strateg
             logger.error("Failed to parse strategy %s: %s", raw.get("id", "?"), e)
             continue
     return strategies
-

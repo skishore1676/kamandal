@@ -24,7 +24,9 @@ from vol_crush.position_manager.service import evaluate_positions
 def main() -> None:
     parser = argparse.ArgumentParser(description="Vol Crush daily dry-run pipeline")
     parser.add_argument("--config", type=Path, default=None, help="Path to config.yaml")
-    parser.add_argument("--skip-backtest", action="store_true", help="Skip replay gate step")
+    parser.add_argument(
+        "--skip-backtest", action="store_true", help="Skip replay gate step"
+    )
     parser.add_argument(
         "--fetch-sources",
         nargs="*",
@@ -60,10 +62,9 @@ def main() -> None:
         results = run_backtests(config)
         logger.info("Backtest gate refreshed for %d strategies", len(results))
 
-    if (
-        config.get("broker", {}).get("active") == "public"
-        and config.get("broker", {}).get("public", {}).get("sync_portfolio_before_optimizer", True)
-    ):
+    if config.get("broker", {}).get("active") == "public" and config.get(
+        "broker", {}
+    ).get("public", {}).get("sync_portfolio_before_optimizer", True):
         try:
             snapshot = sync_public_portfolio(config, store=store)
             logger.info(
@@ -72,7 +73,9 @@ def main() -> None:
                 snapshot.net_liquidation_value,
             )
         except Exception as exc:
-            logger.warning("Public portfolio sync failed; continuing with local state: %s", exc)
+            logger.warning(
+                "Public portfolio sync failed; continuing with local state: %s", exc
+            )
 
     plan = build_trade_plan(store, config, provider)
     store.save_trade_plan(plan)

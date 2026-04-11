@@ -57,7 +57,9 @@ def _build_option_snapshots(row: sqlite3.Row) -> list[OptionSnapshot]:
     timestamp = row["timestamp"]
     symbol = row["symbol"]
     underlying_price = _safe_float(row["stock_price"])
-    expiration = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).date().isoformat()
+    expiration = (
+        datetime.fromisoformat(timestamp.replace("Z", "+00:00")).date().isoformat()
+    )
 
     call = OptionSnapshot(
         underlying=symbol,
@@ -109,14 +111,18 @@ def fetch_public_market_seed(symbol: str) -> dict[str, Any]:
             payload = json.loads(response.read().decode("utf-8"))
         result = payload["chart"]["result"][0]
         closes = result["indicators"]["quote"][0]["close"]
-        close = next((float(item) for item in reversed(closes) if item is not None), 0.0)
+        close = next(
+            (float(item) for item in reversed(closes) if item is not None), 0.0
+        )
         return {"symbol": symbol, "underlying_price": close, "source": "yahoo_public"}
     except (HTTPError, URLError, KeyError, IndexError, ValueError, TypeError) as exc:
         logger.warning("Public seed fetch failed for %s: %s", symbol, exc)
         return {"symbol": symbol, "underlying_price": 0.0, "source": "unavailable"}
 
 
-def build_fixture_payload(config: dict[str, Any]) -> tuple[dict[str, Any], list[ReplayTrade]]:
+def build_fixture_payload(
+    config: dict[str, Any],
+) -> tuple[dict[str, Any], list[ReplayTrade]]:
     """Build a normalized fixture bundle from sibling repos and public data."""
     fixture_cfg = config.get("data_sources", {}).get("fixtures", {})
     db_path = _resolve_path(fixture_cfg.get("import_gds_history_db", ""))
@@ -128,8 +134,7 @@ def build_fixture_payload(config: dict[str, Any]) -> tuple[dict[str, Any], list[
     if db_path.exists():
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT mo.*
                 FROM market_observations mo
                 JOIN (
@@ -140,12 +145,13 @@ def build_fixture_payload(config: dict[str, Any]) -> tuple[dict[str, Any], list[
                   ON latest.symbol = mo.symbol
                  AND latest.max_timestamp = mo.timestamp
                 ORDER BY mo.symbol
-                """
-            ).fetchall()
+                """).fetchall()
         for row in rows:
             symbol = row["symbol"].upper()
             option_snapshots = _build_option_snapshots(row)
-            avg_iv = sum(item.implied_volatility for item in option_snapshots) / max(len(option_snapshots), 1)
+            avg_iv = sum(item.implied_volatility for item in option_snapshots) / max(
+                len(option_snapshots), 1
+            )
             snapshots[symbol] = MarketSnapshot(
                 symbol=symbol,
                 timestamp=row["timestamp"],
@@ -178,8 +184,12 @@ def build_fixture_payload(config: dict[str, Any]) -> tuple[dict[str, Any], list[
                     source=seed.get("source", "public_seed"),
                 )
             elif seed.get("underlying_price"):
-                snapshots[symbol].underlying_price = _safe_float(seed["underlying_price"])
-                snapshots[symbol].notes.append(f"underlying refreshed from {seed['source']}")
+                snapshots[symbol].underlying_price = _safe_float(
+                    seed["underlying_price"]
+                )
+                snapshots[symbol].notes.append(
+                    f"underlying refreshed from {seed['source']}"
+                )
             provenance.append(seed)
 
     replay_trades: list[ReplayTrade] = []
@@ -188,7 +198,9 @@ def build_fixture_payload(config: dict[str, Any]) -> tuple[dict[str, Any], list[
         for item in raw:
             entry_greeks = Greeks.from_dict(item.get("entry_greeks", {}))
             terminal_greeks = Greeks.from_dict(item.get("terminal_greeks", {}))
-            theta_capture = _safe_float(item.get("profit_pct")) / max(abs(entry_greeks.theta), 0.01)
+            theta_capture = _safe_float(item.get("profit_pct")) / max(
+                abs(entry_greeks.theta), 0.01
+            )
             replay_trades.append(
                 ReplayTrade(
                     trade_id=item.get("trade_id", ""),
@@ -206,7 +218,11 @@ def build_fixture_payload(config: dict[str, Any]) -> tuple[dict[str, Any], list[
         provenance.append({"source": str(analysis_path), "records": len(replay_trades)})
 
     if not snapshots:
-        for symbol, price, iv_rank in (("SPY", 520.0, 28.0), ("IWM", 205.0, 34.0), ("QQQ", 442.0, 22.0)):
+        for symbol, price, iv_rank in (
+            ("SPY", 520.0, 28.0),
+            ("IWM", 205.0, 34.0),
+            ("QQQ", 442.0, 22.0),
+        ):
             snapshots[symbol] = MarketSnapshot(
                 symbol=symbol,
                 timestamp=datetime.now(timezone.utc).isoformat(),
@@ -227,14 +243,23 @@ def build_fixture_payload(config: dict[str, Any]) -> tuple[dict[str, Any], list[
     return payload, replay_trades
 
 
-def write_fixture_artifacts(config: dict[str, Any], payload: dict[str, Any], replay_trades: list[ReplayTrade]) -> tuple[Path, Path]:
+def write_fixture_artifacts(
+    config: dict[str, Any], payload: dict[str, Any], replay_trades: list[ReplayTrade]
+) -> tuple[Path, Path]:
     fixture_cfg = config.get("data_sources", {}).get("fixtures", {})
-    bundle_path = _resolve_path(fixture_cfg.get("bundle_path", "data/fixtures/fixture_bundle.json"))
-    replay_path = _resolve_path(fixture_cfg.get("replay_path", "data/fixtures/replay_trades.json"))
+    bundle_path = _resolve_path(
+        fixture_cfg.get("bundle_path", "data/fixtures/fixture_bundle.json")
+    )
+    replay_path = _resolve_path(
+        fixture_cfg.get("replay_path", "data/fixtures/replay_trades.json")
+    )
     bundle_path.parent.mkdir(parents=True, exist_ok=True)
     replay_path.parent.mkdir(parents=True, exist_ok=True)
     bundle_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    replay_path.write_text(json.dumps([trade.to_dict() for trade in replay_trades], indent=2), encoding="utf-8")
+    replay_path.write_text(
+        json.dumps([trade.to_dict() for trade in replay_trades], indent=2),
+        encoding="utf-8",
+    )
     return bundle_path, replay_path
 
 
@@ -254,7 +279,10 @@ class FixtureMarketDataProvider(MarketDataProvider):
         self._cache = self._load_bundle()
 
     def list_market_snapshots(self) -> list[MarketSnapshot]:
-        return [MarketSnapshot.from_dict(item) for item in self._cache.get("market_snapshots", [])]
+        return [
+            MarketSnapshot.from_dict(item)
+            for item in self._cache.get("market_snapshots", [])
+        ]
 
     def get_market_snapshot(self, symbol: str) -> MarketSnapshot | None:
         symbol = symbol.upper()
@@ -266,7 +294,9 @@ class FixtureMarketDataProvider(MarketDataProvider):
 
 def load_replay_trades(config: dict[str, Any]) -> list[ReplayTrade]:
     fixture_cfg = config.get("data_sources", {}).get("fixtures", {})
-    replay_path = _resolve_path(fixture_cfg.get("replay_path", "data/fixtures/replay_trades.json"))
+    replay_path = _resolve_path(
+        fixture_cfg.get("replay_path", "data/fixtures/replay_trades.json")
+    )
     if not replay_path.exists():
         return []
     data = json.loads(replay_path.read_text(encoding="utf-8"))
@@ -289,7 +319,11 @@ def main() -> None:
 
     logger.info("Fixture bundle written to %s", bundle_path)
     logger.info("Replay trades written to %s", replay_path)
-    logger.info("Stored %d market snapshots and %d replay trades", len(payload["market_snapshots"]), len(replay_trades))
+    logger.info(
+        "Stored %d market snapshots and %d replay trades",
+        len(payload["market_snapshots"]),
+        len(replay_trades),
+    )
 
 
 if __name__ == "__main__":

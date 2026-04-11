@@ -5,8 +5,14 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from vol_crush.core.models import RawSourceDocument, SourceType, TradeIdea
-from vol_crush.idea_scraper.scraper import dedupe_trade_ideas, extract_ideas_from_raw_documents
-from vol_crush.idea_sources.adapters import TranscriptDirectoryAdapter, YouTubeChannelAdapter
+from vol_crush.idea_scraper.scraper import (
+    dedupe_trade_ideas,
+    extract_ideas_from_raw_documents,
+)
+from vol_crush.idea_sources.adapters import (
+    TranscriptDirectoryAdapter,
+    YouTubeChannelAdapter,
+)
 from vol_crush.idea_sources.fetcher import run_source_fetch
 from vol_crush.integrations.storage import LocalStore
 
@@ -39,7 +45,9 @@ def test_youtube_adapter_extracts_transcript(monkeypatch):
     "baseUrl":"https:\\/\\/www.youtube.com\\/api\\/timedtext?v=abc123\\u0026lang=en"
     </body></html>
     """
-    transcript_xml = "<transcript><text>Sell the SPY put spread today</text></transcript>"
+    transcript_xml = (
+        "<transcript><text>Sell the SPY put spread today</text></transcript>"
+    )
 
     def fake_fetch(url, timeout=15):
         if "feeds/videos.xml" in url:
@@ -106,12 +114,21 @@ def test_run_source_fetch_transcripts_saves_raw_documents(tmp_path, monkeypatch)
     transcript = tmp_path / "sample.txt"
     transcript.write_text("Trader: Sell the SPY put spread.", encoding="utf-8")
     config = {
-        "storage": {"local": {"sqlite_path": str(tmp_path / "vol_crush.db"), "audit_dir": str(tmp_path / "audit")}},
+        "storage": {
+            "local": {
+                "sqlite_path": str(tmp_path / "vol_crush.db"),
+                "audit_dir": str(tmp_path / "audit"),
+            }
+        },
         "idea_sources": {"transcripts": {"path": str(tmp_path)}},
     }
 
-    documents, ideas, notes = run_source_fetch(config, "transcripts", extract_ideas=False)
-    store = LocalStore(sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit")
+    documents, ideas, notes = run_source_fetch(
+        config, "transcripts", extract_ideas=False
+    )
+    store = LocalStore(
+        sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit"
+    )
 
     assert len(documents) == 1
     assert ideas == []

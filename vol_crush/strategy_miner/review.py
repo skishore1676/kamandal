@@ -63,9 +63,13 @@ def print_distilled_strategy(idx: int, strat: dict[str, Any]) -> None:
                 iv_str += f", <= {iv_max}"
             print(f"    IV Rank:       {iv_str}")
         if filters.get("dte_range"):
-            print(f"    DTE:           {filters['dte_range'][0]} - {filters['dte_range'][1]}")
+            print(
+                f"    DTE:           {filters['dte_range'][0]} - {filters['dte_range'][1]}"
+            )
         if filters.get("delta_range"):
-            print(f"    Delta:         {filters['delta_range'][0]} - {filters['delta_range'][1]}")
+            print(
+                f"    Delta:         {filters['delta_range'][0]} - {filters['delta_range'][1]}"
+            )
         if filters.get("spread_width"):
             print(f"    Spread Width:  ${filters['spread_width']}")
         if filters.get("min_credit_to_width_ratio"):
@@ -95,7 +99,9 @@ def print_distilled_strategy(idx: int, strat: dict[str, Any]) -> None:
         if alloc.get("max_bpr_pct") is not None:
             print(f"    Max BPR:           {alloc['max_bpr_pct']}% of portfolio")
         if alloc.get("max_per_position_pct") is not None:
-            print(f"    Max Per Position:  {alloc['max_per_position_pct']}% of portfolio")
+            print(
+                f"    Max Per Position:  {alloc['max_per_position_pct']}% of portfolio"
+            )
         if alloc.get("max_positions") is not None:
             print(f"    Max Positions:     {alloc['max_positions']}")
         print()
@@ -206,7 +212,11 @@ def _review_one_by_one(
         print_distilled_strategy(i, strat)
 
         while True:
-            choice = input(f"  Strategy {i} — [a]pprove / [s]kip / [e]dit JSON? ").strip().lower()
+            choice = (
+                input(f"  Strategy {i} — [a]pprove / [s]kip / [e]dit JSON? ")
+                .strip()
+                .lower()
+            )
 
             if choice == "a":
                 approved.append(strat)
@@ -279,4 +289,3 @@ def _export_and_reimport(
 
     print(f"  Re-imported {len(strategies)} strategies.")
     return strategies, guidelines
-

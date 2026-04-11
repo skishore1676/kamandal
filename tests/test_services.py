@@ -26,8 +26,15 @@ from vol_crush.position_manager import service as position_manager_service
 
 def _sample_config(tmp_path):
     return {
-        "storage": {"local": {"sqlite_path": str(tmp_path / "vol_crush.db"), "audit_dir": str(tmp_path / "audit")}},
-        "data_sources": {"fixtures": {"bundle_path": str(tmp_path / "fixture_bundle.json")}},
+        "storage": {
+            "local": {
+                "sqlite_path": str(tmp_path / "vol_crush.db"),
+                "audit_dir": str(tmp_path / "audit"),
+            }
+        },
+        "data_sources": {
+            "fixtures": {"bundle_path": str(tmp_path / "fixture_bundle.json")}
+        },
         "portfolio": {
             "constraints": {
                 "beta_weighted_delta_pct": [-5.0, 5.0],
@@ -87,7 +94,12 @@ def _sample_bundle(tmp_path):
                         "bid": 2.0,
                         "ask": 2.2,
                         "last": 2.1,
-                        "greeks": {"delta": 0.18, "gamma": 0.03, "theta": 0.08, "vega": 0.11},
+                        "greeks": {
+                            "delta": 0.18,
+                            "gamma": 0.03,
+                            "theta": 0.08,
+                            "vega": 0.11,
+                        },
                         "implied_volatility": 24.0,
                         "gds_score": 0.1,
                         "source": "test",
@@ -102,7 +114,12 @@ def _sample_bundle(tmp_path):
                         "bid": 1.8,
                         "ask": 2.0,
                         "last": 1.9,
-                        "greeks": {"delta": -0.16, "gamma": 0.025, "theta": 0.09, "vega": 0.1},
+                        "greeks": {
+                            "delta": -0.16,
+                            "gamma": 0.025,
+                            "theta": 0.09,
+                            "vega": 0.1,
+                        },
                         "implied_volatility": 26.0,
                         "gds_score": 0.08,
                         "source": "test",
@@ -120,7 +137,9 @@ def _sample_bundle(tmp_path):
 
 def test_optimizer_builds_executable_trade_plan(tmp_path, monkeypatch):
     config = _sample_config(tmp_path)
-    store = LocalStore(sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit")
+    store = LocalStore(
+        sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit"
+    )
     store.save_trade_ideas(
         [
             TradeIdea(
@@ -156,13 +175,23 @@ def test_optimizer_builds_executable_trade_plan(tmp_path, monkeypatch):
                 "id": "spy_put",
                 "name": "SPY Short Put",
                 "structure": "short_put",
-                "filters": {"underlyings": ["SPY"], "dte_range": [30, 45], "delta_range": [0.14, 0.2]},
+                "filters": {
+                    "underlyings": ["SPY"],
+                    "dte_range": [30, 45],
+                    "delta_range": [0.14, 0.2],
+                },
                 "management": {"profit_target_pct": 50},
-                "allocation": {"max_bpr_pct": 30, "max_per_position_pct": 10, "max_positions": 5},
+                "allocation": {
+                    "max_bpr_pct": 30,
+                    "max_per_position_pct": 10,
+                    "max_positions": 5,
+                },
             }
         )
     ]
-    monkeypatch.setattr("vol_crush.optimizer.service.load_strategy_objects", lambda: strategies)
+    monkeypatch.setattr(
+        "vol_crush.optimizer.service.load_strategy_objects", lambda: strategies
+    )
 
     plan = build_trade_plan(store, config, provider)
 
@@ -173,7 +202,9 @@ def test_optimizer_builds_executable_trade_plan(tmp_path, monkeypatch):
 
 def test_optimizer_returns_no_trade_without_matching_strategy(tmp_path, monkeypatch):
     config = _sample_config(tmp_path)
-    store = LocalStore(sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit")
+    store = LocalStore(
+        sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit"
+    )
     store.save_trade_ideas(
         [
             TradeIdea(
@@ -199,7 +230,9 @@ def test_optimizer_returns_no_trade_without_matching_strategy(tmp_path, monkeypa
 
 def test_optimizer_returns_no_trade_without_ideas(tmp_path, monkeypatch):
     config = _sample_config(tmp_path)
-    store = LocalStore(sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit")
+    store = LocalStore(
+        sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit"
+    )
     provider = FixtureMarketDataProvider(_sample_bundle(tmp_path))
     monkeypatch.setattr("vol_crush.optimizer.service.load_strategy_objects", lambda: [])
 
@@ -218,7 +251,9 @@ def test_optimizer_rejects_event_risk_candidate(tmp_path, monkeypatch):
         "target_delta_bias": 0.0,
         "reject_event_risk": True,
     }
-    store = LocalStore(sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit")
+    store = LocalStore(
+        sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit"
+    )
     store.save_trade_ideas(
         [
             TradeIdea(
@@ -240,7 +275,11 @@ def test_optimizer_rejects_event_risk_candidate(tmp_path, monkeypatch):
     provider = FixtureMarketDataProvider(bundle_path)
     monkeypatch.setattr(
         "vol_crush.optimizer.service.load_strategy_objects",
-        lambda: [Strategy.from_dict({"id": "spy_put", "name": "SPY Short Put", "structure": "short_put"})],
+        lambda: [
+            Strategy.from_dict(
+                {"id": "spy_put", "name": "SPY Short Put", "structure": "short_put"}
+            )
+        ],
     )
 
     plan = build_trade_plan(store, config, provider)
@@ -284,7 +323,9 @@ def test_pending_executor_sizes_order(tmp_path):
 
 def test_position_manager_emits_close_signal(tmp_path, monkeypatch):
     config = _sample_config(tmp_path)
-    store = LocalStore(sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit")
+    store = LocalStore(
+        sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit"
+    )
     store.save_positions(
         [
             Position(
@@ -300,7 +341,9 @@ def test_position_manager_emits_close_signal(tmp_path, monkeypatch):
             )
         ]
     )
-    monkeypatch.setattr("vol_crush.position_manager.service.build_local_store", lambda _: store)
+    monkeypatch.setattr(
+        "vol_crush.position_manager.service.build_local_store", lambda _: store
+    )
     monkeypatch.setattr(
         position_manager_service,
         "_strategy_map",
@@ -310,7 +353,11 @@ def test_position_manager_emits_close_signal(tmp_path, monkeypatch):
                     "id": "spy_put",
                     "name": "SPY Short Put",
                     "structure": "short_put",
-                    "management": {"profit_target_pct": 50, "max_loss_multiple": 2.0, "roll_dte_trigger": 21},
+                    "management": {
+                        "profit_target_pct": 50,
+                        "max_loss_multiple": 2.0,
+                        "roll_dte_trigger": 21,
+                    },
                 }
             )
         },
@@ -333,9 +380,33 @@ def test_backtester_evaluates_strategy_gate(tmp_path):
         }
     )
     trades = [
-        ReplayTrade("t1", "SPY", "SPY2501P", 12.0, True, theta_capture_proxy=3.0, days_in_trade=18.0),
-        ReplayTrade("t2", "SPY", "SPY2502P", -4.0, False, theta_capture_proxy=-1.0, days_in_trade=22.0),
-        ReplayTrade("t3", "SPY", "SPY2503P", 8.0, True, theta_capture_proxy=2.0, days_in_trade=24.0),
+        ReplayTrade(
+            "t1",
+            "SPY",
+            "SPY2501P",
+            12.0,
+            True,
+            theta_capture_proxy=3.0,
+            days_in_trade=18.0,
+        ),
+        ReplayTrade(
+            "t2",
+            "SPY",
+            "SPY2502P",
+            -4.0,
+            False,
+            theta_capture_proxy=-1.0,
+            days_in_trade=22.0,
+        ),
+        ReplayTrade(
+            "t3",
+            "SPY",
+            "SPY2503P",
+            8.0,
+            True,
+            theta_capture_proxy=2.0,
+            days_in_trade=24.0,
+        ),
     ]
 
     result = evaluate_strategy(strategy, trades, config)

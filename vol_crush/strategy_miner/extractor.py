@@ -127,6 +127,7 @@ def extract_all(
 def candidates_to_json(candidates: list[ExtractedStrategyCandidate]) -> str:
     """Serialize candidates to JSON string for the distillation prompt."""
     from dataclasses import asdict
+
     data = [asdict(c) for c in candidates]
     return json.dumps(data, indent=2)
 
@@ -138,8 +139,8 @@ def save_candidates(
     """Save raw candidates to a JSON file for inspection."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     from dataclasses import asdict
+
     data = [asdict(c) for c in candidates]
     with open(output_path, "w") as f:
         json.dump(data, f, indent=2)
     logger.info("Saved %d candidates to %s", len(candidates), output_path)
-

@@ -103,6 +103,7 @@ def main() -> None:
             candidates_data = json.load(f)
         # Convert dicts back to candidate objects for distillation
         from vol_crush.core.models import ExtractedStrategyCandidate
+
         candidates = [ExtractedStrategyCandidate(**c) for c in candidates_data]
         logger.info("Loaded %d candidates from file", len(candidates))
     else:
@@ -119,6 +120,7 @@ def main() -> None:
 
     # Print summary
     from dataclasses import asdict
+
     candidates_dicts = [asdict(c) for c in candidates]
     print_candidates_summary(candidates_dicts)
 
@@ -127,7 +129,9 @@ def main() -> None:
         return
 
     # ── Step 2: Distill ──────────────────────────────────────────────
-    logger.info("Distilling %d candidates into canonical strategies...", len(candidates))
+    logger.info(
+        "Distilling %d candidates into canonical strategies...", len(candidates)
+    )
     strategies_raw, portfolio_guidelines = distill_strategies(llm, candidates)
 
     if not strategies_raw:
@@ -138,8 +142,12 @@ def main() -> None:
     distill_path = project_root / "data" / "distilled_strategies.json"
     with open(distill_path, "w") as f:
         json.dump(
-            {"strategies": strategies_raw, "portfolio_guidelines": portfolio_guidelines},
-            f, indent=2,
+            {
+                "strategies": strategies_raw,
+                "portfolio_guidelines": portfolio_guidelines,
+            },
+            f,
+            indent=2,
         )
     logger.info("Distilled output saved to: %s", distill_path)
 
@@ -150,7 +158,8 @@ def main() -> None:
         approved_guidelines = portfolio_guidelines
     else:
         approved_raw, approved_guidelines = interactive_review(
-            strategies_raw, portfolio_guidelines,
+            strategies_raw,
+            portfolio_guidelines,
         )
 
     if not approved_raw:
@@ -164,7 +173,9 @@ def main() -> None:
         strat.setdefault("dry_run_passed", False)
 
     strategies_path = save_strategies(approved_raw)
-    logger.info("Saved %d approved strategies to: %s", len(approved_raw), strategies_path)
+    logger.info(
+        "Saved %d approved strategies to: %s", len(approved_raw), strategies_path
+    )
 
     # Also update portfolio constraints in config if guidelines were produced
     if approved_guidelines:
@@ -188,4 +199,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

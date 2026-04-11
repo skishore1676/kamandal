@@ -29,18 +29,26 @@ def _max_drawdown(pnls: list[float]) -> float:
 
 def _filter_trades(strategy: Strategy, trades: list[ReplayTrade]) -> list[ReplayTrade]:
     if strategy.filters.underlyings:
-        return [trade for trade in trades if trade.underlying in strategy.filters.underlyings]
+        return [
+            trade
+            for trade in trades
+            if trade.underlying in strategy.filters.underlyings
+        ]
     return trades
 
 
-def evaluate_strategy(strategy: Strategy, trades: list[ReplayTrade], config: dict) -> BacktestResult:
+def evaluate_strategy(
+    strategy: Strategy, trades: list[ReplayTrade], config: dict
+) -> BacktestResult:
     relevant = _filter_trades(strategy, trades)
     total = len(relevant)
     wins = sum(1 for trade in relevant if trade.is_winner)
     losses = total - wins
     total_pnl = sum(trade.profit_pct for trade in relevant)
     avg_pnl = total_pnl / total if total else 0.0
-    theta_proxy = sum(trade.theta_capture_proxy for trade in relevant) / total if total else 0.0
+    theta_proxy = (
+        sum(trade.theta_capture_proxy for trade in relevant) / total if total else 0.0
+    )
     avg_days = sum(trade.days_in_trade for trade in relevant) / total if total else 0.0
     win_rate = wins / total if total else 0.0
     max_drawdown = _max_drawdown([trade.profit_pct for trade in relevant])
@@ -78,7 +86,10 @@ def run_backtests(config: dict) -> list[BacktestResult]:
         store.save_backtest_result(result)
     if raw_strategies:
         for item in raw_strategies:
-            matching = next((result for result in results if result.strategy_id == item.get("id")), None)
+            matching = next(
+                (result for result in results if result.strategy_id == item.get("id")),
+                None,
+            )
             if matching:
                 item["backtest_approved"] = matching.approved
         save_strategies(raw_strategies)

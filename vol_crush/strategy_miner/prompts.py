@@ -133,4 +133,3 @@ Please synthesize them into 3-5 canonical strategies plus portfolio guidelines.
 
 Return the JSON object with canonical strategies and portfolio guidelines.
 """
-

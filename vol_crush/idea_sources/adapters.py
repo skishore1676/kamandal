@@ -12,7 +12,12 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from vol_crush.core.models import RawContentStatus, RawSourceDocument, SourceType
-from vol_crush.idea_sources.utils import clean_text, html_to_text, make_fingerprint, safe_fetch_url
+from vol_crush.idea_sources.utils import (
+    clean_text,
+    html_to_text,
+    make_fingerprint,
+    safe_fetch_url,
+)
 
 logger = logging.getLogger("vol_crush.idea_sources")
 
@@ -20,6 +25,7 @@ logger = logging.getLogger("vol_crush.idea_sources")
 @dataclass
 class SourceFetchResult:
     """Result bundle from an adapter fetch run."""
+
     documents: list[RawSourceDocument] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -36,7 +42,9 @@ def _new_document(
     summary: str = "",
     metadata: dict | None = None,
 ) -> RawSourceDocument:
-    fingerprint = make_fingerprint(source_type.value, source_name, title, url, text[:5000])
+    fingerprint = make_fingerprint(
+        source_type.value, source_name, title, url, text[:5000]
+    )
     return RawSourceDocument(
         document_id=f"doc_{uuid.uuid4().hex[:10]}",
         source_type=source_type.value,
@@ -72,7 +80,9 @@ class TranscriptDirectoryAdapter:
                     metadata={"path": str(path)},
                 )
             )
-        result.notes.append(f"loaded {len(result.documents)} local transcript documents")
+        result.notes.append(
+            f"loaded {len(result.documents)} local transcript documents"
+        )
         return result
 
 
@@ -103,26 +113,36 @@ class GenericWebAdapter:
 
     @staticmethod
     def _extract_title(body: str) -> str:
-        match = re.search(r"<title>(.*?)</title>", body, flags=re.IGNORECASE | re.DOTALL)
+        match = re.search(
+            r"<title>(.*?)</title>", body, flags=re.IGNORECASE | re.DOTALL
+        )
         return clean_text(match.group(1)) if match else ""
 
 
 class RssFeedAdapter:
     """Fetch RSS/Atom feeds and materialize feed items into raw documents."""
 
-    def fetch(self, feed_url: str, limit: int = 5, source_name: str = "rss") -> SourceFetchResult:
+    def fetch(
+        self, feed_url: str, limit: int = 5, source_name: str = "rss"
+    ) -> SourceFetchResult:
         xml_body = safe_fetch_url(feed_url)
         result = SourceFetchResult()
         if not xml_body:
             result.notes.append(f"failed to fetch feed {feed_url}")
             return result
         root = ET.fromstring(xml_body)
-        items = root.findall(".//item") or root.findall(".//{http://www.w3.org/2005/Atom}entry")
+        items = root.findall(".//item") or root.findall(
+            ".//{http://www.w3.org/2005/Atom}entry"
+        )
         for item in items[:limit]:
             title = self._find_text(item, "title")
             link = self._find_text(item, "link")
-            description = self._find_text(item, "description") or self._find_text(item, "summary")
-            published_at = self._find_text(item, "pubDate") or self._find_text(item, "published")
+            description = self._find_text(item, "description") or self._find_text(
+                item, "summary"
+            )
+            published_at = self._find_text(item, "pubDate") or self._find_text(
+                item, "published"
+            )
             author = self._find_text(item, "author")
             text = clean_text(description)
             if link:
@@ -142,7 +162,9 @@ class RssFeedAdapter:
                     metadata={"feed_url": feed_url},
                 )
             )
-        result.notes.append(f"fetched {len(result.documents)} feed items from {feed_url}")
+        result.notes.append(
+            f"fetched {len(result.documents)} feed items from {feed_url}"
+        )
         return result
 
     @staticmethod
@@ -164,7 +186,10 @@ class YouTubeChannelAdapter:
             result.notes.append(f"failed to fetch YouTube feed for {channel_id}")
             return result
         root = ET.fromstring(xml_body)
-        ns = {"atom": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015"}
+        ns = {
+            "atom": "http://www.w3.org/2005/Atom",
+            "yt": "http://www.youtube.com/xml/schemas/2015",
+        }
         entries = root.findall("atom:entry", ns)
         for entry in entries[:limit]:
             video_id = self._find_text(entry, "videoId")
@@ -195,7 +220,9 @@ class YouTubeChannelAdapter:
                     },
                 )
             )
-        result.notes.append(f"fetched {len(result.documents)} YouTube documents from channel {channel_id}")
+        result.notes.append(
+            f"fetched {len(result.documents)} YouTube documents from channel {channel_id}"
+        )
         return result
 
     def _fetch_description(self, url: str) -> str:

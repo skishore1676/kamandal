@@ -26,7 +26,6 @@ from vol_crush.strategy_miner.distiller import (
     build_strategy_objects,
 )
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────
 
 MOCK_EXTRACTION_RESPONSE = {
@@ -160,6 +159,7 @@ def sample_transcripts_dir(tmp_path):
 
 # ── Tests: Extractor ─────────────────────────────────────────────────
 
+
 def test_load_transcripts(sample_transcripts_dir):
     transcripts = load_transcripts(sample_transcripts_dir)
     assert len(transcripts) == 2
@@ -176,9 +176,7 @@ def test_load_transcripts_empty_dir(tmp_path):
 def test_extract_from_transcript(mock_llm):
     mock_llm.chat_json.return_value = MOCK_EXTRACTION_RESPONSE
 
-    candidates = extract_from_transcript(
-        mock_llm, "test.txt", "Some transcript text"
-    )
+    candidates = extract_from_transcript(mock_llm, "test.txt", "Some transcript text")
 
     assert len(candidates) == 1
     assert candidates[0].trader_name == "Mike Butler"
@@ -248,6 +246,7 @@ def test_save_candidates(tmp_path):
 
 # ── Tests: Distiller ─────────────────────────────────────────────────
 
+
 def test_distill_strategies(mock_llm):
     mock_llm.chat_json.return_value = MOCK_DISTILLATION_RESPONSE
 
@@ -291,6 +290,7 @@ def test_build_strategy_objects():
 
 # ── Tests: Full Pipeline ─────────────────────────────────────────────
 
+
 def test_full_pipeline_extract_distill_save(mock_llm, sample_transcripts_dir, tmp_path):
     """End-to-end: extract from transcripts, distill, save to YAML."""
     # Mock extraction
@@ -315,6 +315,7 @@ def test_full_pipeline_extract_distill_save(mock_llm, sample_transcripts_dir, tm
 
     # Save strategies
     from vol_crush.core.config import save_strategies, load_strategies
+
     strat_path = tmp_path / "strategies.yaml"
     for s in strategies_raw:
         s["backtest_approved"] = False
@@ -330,7 +331,7 @@ def test_full_pipeline_extract_distill_save(mock_llm, sample_transcripts_dir, tm
 
     # Verify we can build Strategy objects from saved YAML
     from vol_crush.core.models import Strategy
+
     strat_objects = [Strategy.from_dict(s) for s in loaded]
     assert strat_objects[0].structure.value == "short_strangle"
     assert strat_objects[1].filters.delta_range == (0.18, 0.22)
-

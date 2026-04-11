@@ -19,4 +19,3 @@ __all__ = [
     "capture_from_transcript_file",
     "record_audio",
 ]
-

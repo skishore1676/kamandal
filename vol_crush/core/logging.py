@@ -31,4 +31,3 @@ def setup_logging(level: str = "INFO") -> logging.Logger:
 def get_logger(name: str = "vol_crush") -> logging.Logger:
     """Get a child logger."""
     return logging.getLogger(name)
-

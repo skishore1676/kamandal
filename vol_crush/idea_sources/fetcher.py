@@ -8,8 +8,16 @@ from pathlib import Path
 
 from vol_crush.core.config import get_transcripts_dir, load_config
 from vol_crush.core.logging import setup_logging
-from vol_crush.core.models import IdeaStatus, RawContentStatus, RawSourceDocument, TradeIdea
-from vol_crush.idea_scraper.scraper import dedupe_trade_ideas, extract_ideas_from_raw_documents
+from vol_crush.core.models import (
+    IdeaStatus,
+    RawContentStatus,
+    RawSourceDocument,
+    TradeIdea,
+)
+from vol_crush.idea_scraper.scraper import (
+    dedupe_trade_ideas,
+    extract_ideas_from_raw_documents,
+)
 from vol_crush.idea_sources.adapters import (
     GenericWebAdapter,
     RssFeedAdapter,
@@ -22,7 +30,9 @@ from vol_crush.integrations.storage import build_local_store
 logger = logging.getLogger("vol_crush.idea_sources.fetcher")
 
 
-def _dedupe_documents(existing: list[RawSourceDocument], incoming: list[RawSourceDocument]) -> tuple[list[RawSourceDocument], int]:
+def _dedupe_documents(
+    existing: list[RawSourceDocument], incoming: list[RawSourceDocument]
+) -> tuple[list[RawSourceDocument], int]:
     fingerprints = {document.fingerprint for document in existing}
     kept = []
     duplicates = 0
@@ -36,7 +46,9 @@ def _dedupe_documents(existing: list[RawSourceDocument], incoming: list[RawSourc
     return kept, duplicates
 
 
-def _new_unique_ideas(existing: list[TradeIdea], incoming: list[TradeIdea]) -> list[TradeIdea]:
+def _new_unique_ideas(
+    existing: list[TradeIdea], incoming: list[TradeIdea]
+) -> list[TradeIdea]:
     existing_keys = {
         (
             idea.date,
@@ -66,7 +78,9 @@ def _new_unique_ideas(existing: list[TradeIdea], incoming: list[TradeIdea]) -> l
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Vol Crush source fetcher")
     parser.add_argument("--config", type=Path, default=None)
-    parser.add_argument("--source", choices=["youtube", "rss", "web", "transcripts"], required=True)
+    parser.add_argument(
+        "--source", choices=["youtube", "rss", "web", "transcripts"], required=True
+    )
     parser.add_argument("--channel-id", action="append", default=[])
     parser.add_argument("--feed-url", action="append", default=[])
     parser.add_argument("--url", action="append", default=[])
@@ -94,7 +108,9 @@ def run_source_fetch(
 
     if source == "youtube":
         adapter = YouTubeChannelAdapter()
-        channel_ids = channel_ids or config.get("idea_sources", {}).get("youtube", {}).get("channel_ids", [])
+        channel_ids = channel_ids or config.get("idea_sources", {}).get(
+            "youtube", {}
+        ).get("channel_ids", [])
         if not limit:
             limit = config.get("idea_sources", {}).get("youtube", {}).get("limit", 5)
         for channel_id in channel_ids:
@@ -103,7 +119,9 @@ def run_source_fetch(
             notes.extend(result.notes)
     elif source == "rss":
         adapter = RssFeedAdapter()
-        feed_urls = feed_urls or config.get("idea_sources", {}).get("rss", {}).get("feed_urls", [])
+        feed_urls = feed_urls or config.get("idea_sources", {}).get("rss", {}).get(
+            "feed_urls", []
+        )
         if not limit:
             limit = config.get("idea_sources", {}).get("rss", {}).get("limit", 5)
         for feed_url in feed_urls:
@@ -116,7 +134,11 @@ def run_source_fetch(
         fetched.extend(result.documents)
         notes.extend(result.notes)
     elif source == "transcripts":
-        transcripts_dir = transcripts_dir or Path(config.get("idea_sources", {}).get("transcripts", {}).get("path", get_transcripts_dir()))
+        transcripts_dir = transcripts_dir or Path(
+            config.get("idea_sources", {})
+            .get("transcripts", {})
+            .get("path", get_transcripts_dir())
+        )
         result = TranscriptDirectoryAdapter().fetch(transcripts_dir)
         fetched.extend(result.documents)
         notes.extend(result.notes)
@@ -124,17 +146,23 @@ def run_source_fetch(
     kept, duplicates = _dedupe_documents(existing, fetched)
     store.save_raw_documents(fetched)
     ideas: list[TradeIdea] = []
-    notes.append(f"fetched {len(fetched)} raw documents ({len(kept)} new, {duplicates} duplicates)")
+    notes.append(
+        f"fetched {len(fetched)} raw documents ({len(kept)} new, {duplicates} duplicates)"
+    )
 
     if not extract_ideas or not kept:
         return kept, ideas, notes
 
     openai_key = config.get("openai", {}).get("api_key", "")
     if not openai_key:
-        notes.append("OpenAI API key not configured; raw documents saved but idea extraction skipped.")
+        notes.append(
+            "OpenAI API key not configured; raw documents saved but idea extraction skipped."
+        )
         return kept, ideas, notes
 
-    llm = LLMClient(api_key=openai_key, model=config.get("openai", {}).get("model", "gpt-4o"))
+    llm = LLMClient(
+        api_key=openai_key, model=config.get("openai", {}).get("model", "gpt-4o")
+    )
     ideas = extract_ideas_from_raw_documents(llm, kept)
     unique_new_ideas = _new_unique_ideas(store.list_trade_ideas(), ideas)
     for document in kept:

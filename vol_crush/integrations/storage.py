@@ -11,6 +11,7 @@ from vol_crush.core.config import get_data_dir, get_project_root
 from vol_crush.core.interfaces import StorageBackend
 from vol_crush.core.models import (
     BacktestResult,
+    BrokerPositionLeg,
     PendingOrder,
     PortfolioSnapshot,
     Position,
@@ -32,7 +33,9 @@ def _resolve_path(raw_path: str) -> Path:
 class LocalStore(StorageBackend):
     """SQLite-backed operational store with JSON audit mirrors."""
 
-    def __init__(self, sqlite_path: str | Path | None = None, audit_dir: str | Path | None = None):
+    def __init__(
+        self, sqlite_path: str | Path | None = None, audit_dir: str | Path | None = None
+    ):
         data_dir = get_data_dir()
         self.sqlite_path = _resolve_path(str(sqlite_path or data_dir / "vol_crush.db"))
         self.audit_dir = _resolve_path(str(audit_dir or data_dir / "audit"))
@@ -47,8 +50,7 @@ class LocalStore(StorageBackend):
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
-            conn.executescript(
-                """
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS trade_ideas (
                     id TEXT PRIMARY KEY,
                     status TEXT NOT NULL,
@@ -63,6 +65,12 @@ class LocalStore(StorageBackend):
                 CREATE TABLE IF NOT EXISTS positions (
                     id TEXT PRIMARY KEY,
                     status TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS broker_position_legs (
+                    id TEXT PRIMARY KEY,
+                    broker TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
                     payload TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS portfolio_snapshots (
@@ -92,8 +100,7 @@ class LocalStore(StorageBackend):
                     id TEXT PRIMARY KEY,
                     payload TEXT NOT NULL
                 );
-                """
-            )
+                """)
 
     def _upsert_many(self, table: str, rows: list[tuple[str, str, str]]) -> None:
         with self._connect() as conn:
@@ -104,12 +111,16 @@ class LocalStore(StorageBackend):
 
     def _write_audit(self, name: str, payload: Any) -> None:
         path = self.audit_dir / f"{name}.json"
-        path.write_text(json.dumps(serialize_value(payload), indent=2), encoding="utf-8")
+        path.write_text(
+            json.dumps(serialize_value(payload), indent=2), encoding="utf-8"
+        )
 
     def save_trade_ideas(self, ideas: list[TradeIdea]) -> None:
         rows = [(idea.id, idea.status, json.dumps(idea.to_dict())) for idea in ideas]
         self._upsert_many("trade_ideas", rows)
-        self._write_audit("trade_ideas", [idea.to_dict() for idea in self.list_trade_ideas()])
+        self._write_audit(
+            "trade_ideas", [idea.to_dict() for idea in self.list_trade_ideas()]
+        )
 
     def list_trade_ideas(self, status: str | None = None) -> list[TradeIdea]:
         query = "SELECT payload FROM trade_ideas"
@@ -163,9 +174,14 @@ class LocalStore(StorageBackend):
         return [RawSourceDocument.from_dict(json.loads(row["payload"])) for row in rows]
 
     def save_positions(self, positions: list[Position]) -> None:
-        rows = [(position.position_id, position.status, json.dumps(position.to_dict())) for position in positions]
+        rows = [
+            (position.position_id, position.status, json.dumps(position.to_dict()))
+            for position in positions
+        ]
         self._upsert_many("positions", rows)
-        self._write_audit("positions", [position.to_dict() for position in self.list_positions()])
+        self._write_audit(
+            "positions", [position.to_dict() for position in self.list_positions()]
+        )
 
     def list_positions(self, status: str | None = None) -> list[Position]:
         query = "SELECT payload FROM positions"
@@ -177,6 +193,37 @@ class LocalStore(StorageBackend):
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
         return [Position.from_dict(json.loads(row["payload"])) for row in rows]
+
+    def replace_broker_legs(self, broker: str, legs: list[BrokerPositionLeg]) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM broker_position_legs WHERE broker = ?", (broker,))
+            conn.executemany(
+                "INSERT INTO broker_position_legs VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        leg.leg_id,
+                        leg.broker,
+                        leg.account_id,
+                        json.dumps(leg.to_dict()),
+                    )
+                    for leg in legs
+                ],
+            )
+        self._write_audit(
+            "broker_position_legs",
+            [item.to_dict() for item in self.list_broker_legs()],
+        )
+
+    def list_broker_legs(self, broker: str | None = None) -> list[BrokerPositionLeg]:
+        query = "SELECT payload FROM broker_position_legs"
+        params: tuple[Any, ...] = ()
+        if broker:
+            query += " WHERE broker = ?"
+            params = (broker,)
+        query += " ORDER BY id"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [BrokerPositionLeg.from_dict(json.loads(row["payload"])) for row in rows]
 
     def save_portfolio_snapshot(self, snapshot: PortfolioSnapshot) -> None:
         payload = json.dumps(snapshot.to_dict())
@@ -190,7 +237,9 @@ class LocalStore(StorageBackend):
 
     def list_portfolio_snapshots(self) -> list[PortfolioSnapshot]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT payload FROM portfolio_snapshots ORDER BY id").fetchall()
+            rows = conn.execute(
+                "SELECT payload FROM portfolio_snapshots ORDER BY id"
+            ).fetchall()
         return [PortfolioSnapshot.from_dict(json.loads(row["payload"])) for row in rows]
 
     def get_latest_portfolio_snapshot(self) -> PortfolioSnapshot | None:
@@ -208,11 +257,15 @@ class LocalStore(StorageBackend):
                 "INSERT OR REPLACE INTO trade_plans VALUES (?, ?, ?)",
                 (plan.plan_id, plan.status, json.dumps(plan.to_dict())),
             )
-        self._write_audit("trade_plans", [item.to_dict() for item in self.list_trade_plans()])
+        self._write_audit(
+            "trade_plans", [item.to_dict() for item in self.list_trade_plans()]
+        )
 
     def list_trade_plans(self) -> list[TradePlan]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT payload FROM trade_plans ORDER BY id").fetchall()
+            rows = conn.execute(
+                "SELECT payload FROM trade_plans ORDER BY id"
+            ).fetchall()
         return [TradePlan.from_dict(json.loads(row["payload"])) for row in rows]
 
     def save_pending_orders(self, orders: list[PendingOrder]) -> None:
@@ -221,7 +274,9 @@ class LocalStore(StorageBackend):
             for order in orders
         ]
         self._upsert_many("pending_orders", rows)
-        self._write_audit("pending_orders", [item.to_dict() for item in self.list_pending_orders()])
+        self._write_audit(
+            "pending_orders", [item.to_dict() for item in self.list_pending_orders()]
+        )
 
     def list_pending_orders(self, status: str | None = None) -> list[PendingOrder]:
         query = "SELECT payload FROM pending_orders"
@@ -239,13 +294,22 @@ class LocalStore(StorageBackend):
         with self._connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO backtest_results VALUES (?, ?, ?)",
-                (result.strategy_id, "approved" if result.approved else "pending", json.dumps(payload)),
+                (
+                    result.strategy_id,
+                    "approved" if result.approved else "pending",
+                    json.dumps(payload),
+                ),
             )
-        self._write_audit("backtest_results", [item.to_dict() for item in self.list_backtest_results()])
+        self._write_audit(
+            "backtest_results",
+            [item.to_dict() for item in self.list_backtest_results()],
+        )
 
     def list_backtest_results(self) -> list[BacktestResult]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT payload FROM backtest_results ORDER BY id").fetchall()
+            rows = conn.execute(
+                "SELECT payload FROM backtest_results ORDER BY id"
+            ).fetchall()
         return [BacktestResult(**json.loads(row["payload"])) for row in rows]
 
     def save_fixture_payload(self, payload: dict) -> None:
@@ -258,7 +322,9 @@ class LocalStore(StorageBackend):
 
     def load_fixture_payload(self) -> dict:
         with self._connect() as conn:
-            row = conn.execute("SELECT payload FROM fixtures WHERE id = ?", ("current",)).fetchone()
+            row = conn.execute(
+                "SELECT payload FROM fixtures WHERE id = ?", ("current",)
+            ).fetchone()
         if row is None:
             return {}
         return json.loads(row["payload"])
@@ -269,11 +335,15 @@ class LocalStore(StorageBackend):
                 "INSERT OR REPLACE INTO replay_trades VALUES (?, ?)",
                 [(trade.trade_id, json.dumps(trade.to_dict())) for trade in trades],
             )
-        self._write_audit("replay_trades", [trade.to_dict() for trade in self.list_replay_trades()])
+        self._write_audit(
+            "replay_trades", [trade.to_dict() for trade in self.list_replay_trades()]
+        )
 
     def list_replay_trades(self) -> list[ReplayTrade]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT payload FROM replay_trades ORDER BY id").fetchall()
+            rows = conn.execute(
+                "SELECT payload FROM replay_trades ORDER BY id"
+            ).fetchall()
         return [ReplayTrade.from_dict(json.loads(row["payload"])) for row in rows]
 
 

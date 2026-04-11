@@ -13,7 +13,6 @@ from typing import Any
 
 import yaml
 
-
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _CONFIG_DIR = _PROJECT_ROOT / "config"
 
@@ -65,8 +64,12 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
         "broker.public.account_id": os.environ.get("PUBLIC_ACCOUNT_ID"),
         "broker.public.session_file": os.environ.get("PUBLIC_SESSION_FILE"),
         "broker.public.account_cache_file": os.environ.get("PUBLIC_ACCOUNT_CACHE_FILE"),
-        "broker.public.token_validity_minutes": os.environ.get("PUBLIC_TOKEN_VALIDITY_MINUTES"),
-        "broker.public.api_requests_per_second": os.environ.get("API_REQUESTS_PER_SECOND"),
+        "broker.public.token_validity_minutes": os.environ.get(
+            "PUBLIC_TOKEN_VALIDITY_MINUTES"
+        ),
+        "broker.public.api_requests_per_second": os.environ.get(
+            "API_REQUESTS_PER_SECOND"
+        ),
         "broker.public.api_burst_limit": os.environ.get("API_BURST_LIMIT"),
         "google_sheets.spreadsheet_id": os.environ.get("VOL_CRUSH_GSHEET_ID"),
         "backtesting.polygon.api_key": os.environ.get("VOL_CRUSH_POLYGON_API_KEY"),
@@ -116,7 +119,9 @@ def load_strategies(strategies_path: str | Path | None = None) -> list[dict[str,
     return data.get("strategies", []) or []
 
 
-def save_strategies(strategies: list[dict[str, Any]], strategies_path: str | Path | None = None) -> Path:
+def save_strategies(
+    strategies: list[dict[str, Any]], strategies_path: str | Path | None = None
+) -> Path:
     """Save strategies to strategies.yaml."""
     if strategies_path is None:
         strategies_path = _CONFIG_DIR / "strategies.yaml"

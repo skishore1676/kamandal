@@ -30,6 +30,7 @@ logger = logging.getLogger("vol_crush.idea_scraper")
 
 # ── Transcription ─────────────────────────────────────────────────────
 
+
 def transcribe_audio_file(llm_client: LLMClient, audio_path: Path) -> str:
     """Transcribe an audio file using OpenAI Whisper API."""
     logger.info("Transcribing audio: %s", audio_path)
@@ -50,6 +51,7 @@ def transcribe_text(text: str) -> str:
 
 
 # ── Idea Extraction ──────────────────────────────────────────────────
+
 
 def extract_ideas_from_transcript(
     llm: LLMClient,
@@ -102,7 +104,9 @@ def extract_ideas_from_transcript(
             status=IdeaStatus.NEW.value,
         )
         ideas.append(idea)
-        logger.debug("  -> %s: %s on %s", idea.trader_name, idea.strategy_type, idea.underlying)
+        logger.debug(
+            "  -> %s: %s on %s", idea.trader_name, idea.strategy_type, idea.underlying
+        )
 
     return ideas
 
@@ -119,6 +123,7 @@ def _parse_credit(credit_str: str) -> float:
 
 # ── Audio Recording ──────────────────────────────────────────────────
 
+
 def record_audio(
     duration_seconds: int,
     sample_rate: int = 16000,
@@ -132,9 +137,7 @@ def record_audio(
     try:
         import sounddevice as sd
     except ImportError:
-        raise RuntimeError(
-            "sounddevice not installed. Run: pip install sounddevice"
-        )
+        raise RuntimeError("sounddevice not installed. Run: pip install sounddevice")
 
     logger.info("Recording audio for %d seconds...", duration_seconds)
     audio_data = sd.rec(
@@ -163,6 +166,7 @@ def record_audio(
 
 # ── Pipeline: Record → Transcribe → Extract ──────────────────────────
 
+
 def capture_from_audio_file(
     llm: LLMClient,
     audio_path: Path,
@@ -170,7 +174,9 @@ def capture_from_audio_file(
 ) -> list[TradeIdea]:
     """Full pipeline: transcribe audio file → extract ideas."""
     transcript = transcribe_audio_file(llm, audio_path)
-    return extract_ideas_from_transcript(llm, transcript, source=source, source_url=str(audio_path))
+    return extract_ideas_from_transcript(
+        llm, transcript, source=source, source_url=str(audio_path)
+    )
 
 
 def capture_from_transcript_file(

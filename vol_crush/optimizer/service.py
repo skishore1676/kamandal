@@ -19,11 +19,13 @@ from vol_crush.core.models import (
     ConstraintCheck,
     Greeks,
     IdeaStatus,
+    ManagementStatus,
     MarketRegime,
     MarketSnapshot,
     OptionLeg,
     PlanDecision,
     PortfolioSnapshot,
+    Position,
     RegimePolicy,
     Strategy,
     StrategyType,
@@ -91,7 +93,9 @@ def _default_expiration(snapshot: MarketSnapshot) -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
-def _approximate_candidate(idea: TradeIdea, strategy: Strategy, snapshot: MarketSnapshot) -> CandidatePosition:
+def _approximate_candidate(
+    idea: TradeIdea, strategy: Strategy, snapshot: MarketSnapshot
+) -> CandidatePosition:
     call = _pick_option(snapshot, "call")
     put = _pick_option(snapshot, "put")
     strategy_type = strategy.structure.value
@@ -123,29 +127,81 @@ def _approximate_candidate(idea: TradeIdea, strategy: Strategy, snapshot: Market
         )
         bpr = max(snapshot.underlying_price * 100 * 0.2, credit * 100 * 6)
         legs = [
-            OptionLeg(idea.underlying, idea.expiration or put.expiration, put.strike, "put", "sell"),
-            OptionLeg(idea.underlying, idea.expiration or call.expiration, call.strike, "call", "sell"),
+            OptionLeg(
+                idea.underlying,
+                idea.expiration or put.expiration,
+                put.strike,
+                "put",
+                "sell",
+            ),
+            OptionLeg(
+                idea.underlying,
+                idea.expiration or call.expiration,
+                call.strike,
+                "call",
+                "sell",
+            ),
         ]
-    elif strategy_type in (StrategyType.PUT_SPREAD.value, StrategyType.CALL_SPREAD.value, StrategyType.IRON_CONDOR.value):
-        base = put if "put" in strategy_type or strategy_type == StrategyType.IRON_CONDOR.value else call
+    elif strategy_type in (
+        StrategyType.PUT_SPREAD.value,
+        StrategyType.CALL_SPREAD.value,
+        StrategyType.IRON_CONDOR.value,
+    ):
+        base = (
+            put
+            if "put" in strategy_type or strategy_type == StrategyType.IRON_CONDOR.value
+            else call
+        )
         other_type = "call" if strategy_type == StrategyType.IRON_CONDOR.value else None
         credit = credit or (base.mid * 0.5 if base else 1.0)
-        source_greeks = base.greeks if base else Greeks(delta=-0.18, gamma=0.04, theta=0.08, vega=0.05)
+        source_greeks = (
+            base.greeks
+            if base
+            else Greeks(delta=-0.18, gamma=0.04, theta=0.08, vega=0.05)
+        )
         greeks = source_greeks * 0.6
         bpr = max((strategy.filters.spread_width or 5.0) * 100, credit * 100 * 2)
         if base:
             width = strategy.filters.spread_width or 5.0
-            buy_strike = base.strike - width if base.option_type == "put" else base.strike + width
+            buy_strike = (
+                base.strike - width
+                if base.option_type == "put"
+                else base.strike + width
+            )
             legs = [
-                OptionLeg(idea.underlying, idea.expiration or base.expiration, base.strike, base.option_type, "sell"),
-                OptionLeg(idea.underlying, idea.expiration or base.expiration, buy_strike, base.option_type, "buy"),
+                OptionLeg(
+                    idea.underlying,
+                    idea.expiration or base.expiration,
+                    base.strike,
+                    base.option_type,
+                    "sell",
+                ),
+                OptionLeg(
+                    idea.underlying,
+                    idea.expiration or base.expiration,
+                    buy_strike,
+                    base.option_type,
+                    "buy",
+                ),
             ]
             if other_type and call:
                 width = strategy.filters.spread_width or 5.0
                 legs.extend(
                     [
-                        OptionLeg(idea.underlying, idea.expiration or call.expiration, call.strike, "call", "sell"),
-                        OptionLeg(idea.underlying, idea.expiration or call.expiration, call.strike + width, "call", "buy"),
+                        OptionLeg(
+                            idea.underlying,
+                            idea.expiration or call.expiration,
+                            call.strike,
+                            "call",
+                            "sell",
+                        ),
+                        OptionLeg(
+                            idea.underlying,
+                            idea.expiration or call.expiration,
+                            call.strike + width,
+                            "call",
+                            "buy",
+                        ),
                     ]
                 )
     else:
@@ -186,8 +242,13 @@ def validate_trade_ideas(
         if strategy is None:
             notes.append(f"{idea.id}: no approved strategy for {idea.strategy_type}")
             continue
-        if strategy.filters.underlyings and idea.underlying not in strategy.filters.underlyings:
-            notes.append(f"{idea.id}: underlying {idea.underlying} not in strategy bounds")
+        if (
+            strategy.filters.underlyings
+            and idea.underlying not in strategy.filters.underlyings
+        ):
+            notes.append(
+                f"{idea.id}: underlying {idea.underlying} not in strategy bounds"
+            )
             continue
         snapshot = provider.get_market_snapshot(idea.underlying)
         if snapshot is None:
@@ -203,7 +264,9 @@ def validate_trade_ideas(
             notes.append(f"{idea.id}: IV rank {snapshot.iv_rank} above regime ceiling")
             continue
         if strategy.structure.value in policy.avoid_structures:
-            notes.append(f"{idea.id}: {strategy.structure.value} down-ranked by regime policy")
+            notes.append(
+                f"{idea.id}: {strategy.structure.value} down-ranked by regime policy"
+            )
         candidates.append(_approximate_candidate(idea, strategy, snapshot))
 
     return candidates, notes
@@ -238,7 +301,34 @@ def build_portfolio_snapshot(store: StorageBackend) -> PortfolioSnapshot:
     return snapshot
 
 
-def _project_portfolio(base: PortfolioSnapshot, candidates: list[CandidatePosition]) -> PortfolioSnapshot:
+def _auto_managed_positions(snapshot: PortfolioSnapshot) -> list[Position]:
+    """Return positions the optimizer is allowed to count for diversification.
+
+    Groups flagged for manual review (inferred short calls, unknown_complex,
+    orphan_leg, etc.) still contribute Greeks and BPR to the aggregate — we see
+    the real exposure — but they do NOT count toward position_count or
+    diversification bonuses, because we cannot reason about their management.
+    """
+    return [
+        p
+        for p in snapshot.positions
+        if p.management_status == ManagementStatus.AUTO.value
+    ]
+
+
+def _orphan_leg_count(snapshot: PortfolioSnapshot) -> int:
+    return sum(
+        1
+        for p in snapshot.positions
+        if p.strategy_type
+        in (StrategyType.ORPHAN_LEG.value, StrategyType.UNKNOWN_COMPLEX.value)
+        or p.management_status == ManagementStatus.MANUAL_REVIEW_REQUIRED.value
+    )
+
+
+def _project_portfolio(
+    base: PortfolioSnapshot, candidates: list[CandidatePosition]
+) -> PortfolioSnapshot:
     projected = PortfolioSnapshot.from_dict(base.to_dict())
     total_bpr = base.bpr_used
     greeks = Greeks.from_dict(base.greeks.to_dict())
@@ -249,19 +339,53 @@ def _project_portfolio(base: PortfolioSnapshot, candidates: list[CandidatePositi
     projected.greeks = greeks
     projected.beta_weighted_delta = greeks.delta
     projected.bpr_used = total_bpr
-    projected.bpr_used_pct = (total_bpr / projected.net_liquidation_value) * 100.0 if projected.net_liquidation_value else 0.0
-    projected.theta_as_pct_nlv = (greeks.theta * 100.0 / projected.net_liquidation_value) if projected.net_liquidation_value else 0.0
-    projected.gamma_theta_ratio = abs(greeks.gamma / greeks.theta) if greeks.theta else 0.0
-    projected.position_count = base.position_count + len(candidates)
+    projected.bpr_used_pct = (
+        (total_bpr / projected.net_liquidation_value) * 100.0
+        if projected.net_liquidation_value
+        else 0.0
+    )
+    projected.theta_as_pct_nlv = (
+        (greeks.theta * 100.0 / projected.net_liquidation_value)
+        if projected.net_liquidation_value
+        else 0.0
+    )
+    projected.gamma_theta_ratio = (
+        abs(greeks.gamma / greeks.theta) if greeks.theta else 0.0
+    )
+    # position_count is the number of *auto-managed* groups plus the new candidates.
+    # Manual-review groups still live in the portfolio (so their Greeks and BPR
+    # appear in the aggregate), but they don't count toward max_positions.
+    auto_baseline = len(_auto_managed_positions(base))
+    projected.position_count = auto_baseline + len(candidates)
     return projected
 
 
-def evaluate_constraints(projected: PortfolioSnapshot, candidates: list[CandidatePosition], config: dict) -> list[ConstraintCheck]:
+def evaluate_constraints(
+    projected: PortfolioSnapshot,
+    candidates: list[CandidatePosition],
+    config: dict,
+    base: PortfolioSnapshot | None = None,
+) -> list[ConstraintCheck]:
     constraints = config.get("portfolio", {}).get("constraints", {})
+    max_orphan_legs = int(constraints.get("max_orphan_legs", 0))
+    orphan_count = _orphan_leg_count(base) if base is not None else 0
     checks = [
         ConstraintCheck(
+            name="max_orphan_legs",
+            passed=orphan_count <= max_orphan_legs,
+            actual=float(orphan_count),
+            max_value=float(max_orphan_legs),
+            message=(
+                "Portfolio contains ungrouped short / unknown-complex legs above "
+                "the configured threshold. Refuse new opens until they are classified "
+                "or manually resolved."
+            ),
+        ),
+        ConstraintCheck(
             name="beta_weighted_delta_pct",
-            passed=constraints["beta_weighted_delta_pct"][0] <= projected.beta_weighted_delta <= constraints["beta_weighted_delta_pct"][1],
+            passed=constraints["beta_weighted_delta_pct"][0]
+            <= projected.beta_weighted_delta
+            <= constraints["beta_weighted_delta_pct"][1],
             actual=projected.beta_weighted_delta,
             min_value=constraints["beta_weighted_delta_pct"][0],
             max_value=constraints["beta_weighted_delta_pct"][1],
@@ -269,7 +393,9 @@ def evaluate_constraints(projected: PortfolioSnapshot, candidates: list[Candidat
         ),
         ConstraintCheck(
             name="daily_theta_pct",
-            passed=constraints["daily_theta_pct"][0] <= projected.theta_as_pct_nlv <= constraints["daily_theta_pct"][1],
+            passed=constraints["daily_theta_pct"][0]
+            <= projected.theta_as_pct_nlv
+            <= constraints["daily_theta_pct"][1],
             actual=projected.theta_as_pct_nlv,
             min_value=constraints["daily_theta_pct"][0],
             max_value=constraints["daily_theta_pct"][1],
@@ -299,7 +425,9 @@ def evaluate_constraints(projected: PortfolioSnapshot, candidates: list[Candidat
     ]
     by_underlying = {}
     for candidate in candidates:
-        by_underlying[candidate.underlying] = by_underlying.get(candidate.underlying, 0.0) + candidate.estimated_bpr
+        by_underlying[candidate.underlying] = (
+            by_underlying.get(candidate.underlying, 0.0) + candidate.estimated_bpr
+        )
     for underlying, bpr in by_underlying.items():
         pct = (bpr / projected.bpr_used) * 100.0 if projected.bpr_used else 0.0
         checks.append(
@@ -332,9 +460,21 @@ def _score_combo(
     unique_underlyings = len({candidate.underlying for candidate in candidates})
     unique_sectors = len({candidate.sector for candidate in candidates})
     diversification_score = unique_underlyings + (0.5 * unique_sectors)
-    preferred_hits = sum(1 for candidate in candidates if candidate.strategy_type in policy.prefer_structures)
-    avoided_hits = sum(1 for candidate in candidates if candidate.strategy_type in policy.avoid_structures)
-    regime_fit = preferred_hits - avoided_hits - sum(1 for candidate in candidates if candidate.event_risk)
+    preferred_hits = sum(
+        1
+        for candidate in candidates
+        if candidate.strategy_type in policy.prefer_structures
+    )
+    avoided_hits = sum(
+        1
+        for candidate in candidates
+        if candidate.strategy_type in policy.avoid_structures
+    )
+    regime_fit = (
+        preferred_hits
+        - avoided_hits
+        - sum(1 for candidate in candidates if candidate.event_risk)
+    )
     total_score = (
         delta_score * weights.get("delta_improvement", 0.25)
         + gamma_score * weights.get("gamma_profile", 0.20)
@@ -344,7 +484,9 @@ def _score_combo(
     )
     notes = []
     if avoided_hits:
-        notes.append("One or more structures were down-ranked by the current regime policy.")
+        notes.append(
+            "One or more structures were down-ranked by the current regime policy."
+        )
     if not all(check.passed for check in checks):
         notes.append("Constraint failures prevent this combo from being tradable.")
     return ComboScore(
@@ -377,8 +519,14 @@ def rank_candidate_combos(
             break
         for group in itertools.combinations(candidates, min(size, len(candidates))):
             projected = _project_portfolio(base_snapshot, list(group))
-            checks = evaluate_constraints(projected, list(group), config)
-            combos.append(_score_combo(base_snapshot, projected, list(group), checks, config, policy))
+            checks = evaluate_constraints(
+                projected, list(group), config, base=base_snapshot
+            )
+            combos.append(
+                _score_combo(
+                    base_snapshot, projected, list(group), checks, config, policy
+                )
+            )
     combos.sort(key=lambda item: item.total_score, reverse=True)
     return combos
 
@@ -389,7 +537,11 @@ def build_trade_plan(
     provider: FixtureMarketDataProvider,
 ) -> TradePlan:
     strategies = load_strategy_objects()
-    ideas = [idea for idea in store.list_trade_ideas() if idea.status in (IdeaStatus.NEW.value, IdeaStatus.APPROVED.value)]
+    ideas = [
+        idea
+        for idea in store.list_trade_ideas()
+        if idea.status in (IdeaStatus.NEW.value, IdeaStatus.APPROVED.value)
+    ]
     snapshots = provider.list_market_snapshots()
     evaluator = ConfigRegimeEvaluator(config)
     regime = evaluator.determine_regime(snapshots)
@@ -420,7 +572,13 @@ def build_trade_plan(
             ranked_combos=ranked[:3],
             candidate_positions=candidates,
             reasoning="Candidates were evaluated, but no combo improved the portfolio enough within constraints.",
-            risk_flags=notes + [item.message for combo in ranked[:3] for item in combo.constraint_checks if not item.passed],
+            risk_flags=notes
+            + [
+                item.message
+                for combo in ranked[:3]
+                for item in combo.constraint_checks
+                if not item.passed
+            ],
             status="pending",
         )
 
@@ -447,11 +605,17 @@ def main() -> None:
     config = load_config(args.config)
     logger = setup_logging(config.get("app", {}).get("log_level", "INFO"))
     store = build_local_store(config)
-    bundle_path = config.get("data_sources", {}).get("fixtures", {}).get("bundle_path", "data/fixtures/fixture_bundle.json")
+    bundle_path = (
+        config.get("data_sources", {})
+        .get("fixtures", {})
+        .get("bundle_path", "data/fixtures/fixture_bundle.json")
+    )
     provider = FixtureMarketDataProvider(bundle_path)
     plan = build_trade_plan(store, config, provider)
     store.save_trade_plan(plan)
-    logger.info("Generated trade plan %s with decision=%s", plan.plan_id, plan.decision.value)
+    logger.info(
+        "Generated trade plan %s with decision=%s", plan.plan_id, plan.decision.value
+    )
     if plan.selected_combo_ids:
         logger.info("Selected combo ids: %s", ", ".join(plan.selected_combo_ids))
     else:

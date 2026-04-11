@@ -5,4 +5,3 @@ Monitors open positions against management rules from strategies.yaml.
 Triggers profit-taking, loss management, rolls, and constraint alerts.
 Runs continuously during market hours.
 """
-

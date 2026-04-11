@@ -33,7 +33,9 @@ def _sized_quantity(candidate, portfolio: PortfolioSnapshot, config: dict) -> in
     return max(1, int(max_bpr_for_single // candidate.estimated_bpr))
 
 
-def create_pending_orders(plan: TradePlan, portfolio: PortfolioSnapshot, config: dict) -> list[PendingOrder]:
+def create_pending_orders(
+    plan: TradePlan, portfolio: PortfolioSnapshot, config: dict
+) -> list[PendingOrder]:
     if plan.decision.value != "execute":
         return []
     created_at = datetime.now(timezone.utc).isoformat()
@@ -79,11 +81,17 @@ def execute_latest_plan(config: dict) -> list[PendingOrder]:
             adapter = PublicBrokerAdapter(config)
             orders = adapter.submit_pending_orders(orders)
             store.save_pending_orders(orders)
-            if config.get("broker", {}).get("public", {}).get("sync_portfolio_after_submission", True):
+            if (
+                config.get("broker", {})
+                .get("public", {})
+                .get("sync_portfolio_after_submission", True)
+            ):
                 try:
                     sync_public_portfolio(config, store=store, adapter=adapter)
                 except Exception as exc:
-                    logger.warning("Post-submission Public portfolio sync failed: %s", exc)
+                    logger.warning(
+                        "Post-submission Public portfolio sync failed: %s", exc
+                    )
     return orders
 
 

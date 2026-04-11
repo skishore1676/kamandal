@@ -15,8 +15,12 @@ from typing import Any
 
 class StrategyType(str, Enum):
     """Supported option strategy structures."""
+
     SHORT_STRANGLE = "short_strangle"
     SHORT_PUT = "short_put"
+    SHORT_CALL = "short_call"
+    LONG_PUT = "long_put"
+    LONG_CALL = "long_call"
     IRON_CONDOR = "iron_condor"
     PUT_SPREAD = "put_spread"
     CALL_SPREAD = "call_spread"
@@ -25,7 +29,38 @@ class StrategyType(str, Enum):
     CALENDAR_SPREAD = "calendar_spread"
     COVERED_STRANGLE = "covered_strangle"
     STRADDLE = "straddle"
+    UNKNOWN_COMPLEX = "unknown_complex"
+    ORPHAN_LEG = "orphan_leg"
     CUSTOM = "custom"
+
+
+class PositionSource(str, Enum):
+    """How a Position (group) came to exist in Kamandal's view of the book."""
+
+    KAMANDAL_ORDER = (
+        "kamandal_order"  # opened by our executor, tied to a broker orderId we issued
+    )
+    PUBLIC_ORDER = "public_order"  # rehydrated from GET /order/{id} on the broker side
+    PUBLIC_INFERRED = (
+        "public_inferred"  # grouped deterministically from raw broker legs
+    )
+    MANUAL = "manual"  # human-entered or test-only
+
+
+class GroupConfidence(str, Enum):
+    """How sure Kamandal is that a group's classification is correct."""
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class ManagementStatus(str, Enum):
+    """Whether the position manager is allowed to emit automatic actions for a group."""
+
+    AUTO = "auto"
+    MANUAL_REVIEW_REQUIRED = "manual_review_required"
+    BLOCKED = "blocked"
 
 
 class IdeaStatus(str, Enum):
@@ -81,11 +116,12 @@ class RawContentStatus(str, Enum):
 @dataclass
 class ManagementRules:
     """Position management rules for a strategy."""
-    profit_target_pct: float = 50.0          # close at X% of max profit
-    max_loss_multiple: float = 2.0           # close at Nx credit received
-    roll_dte_trigger: int = 21               # roll when DTE <= this
-    roll_for_credit: bool = True             # only roll if net credit
-    close_before_expiration: bool = True     # never hold to expiry
+
+    profit_target_pct: float = 50.0  # close at X% of max profit
+    max_loss_multiple: float = 2.0  # close at Nx credit received
+    roll_dte_trigger: int = 21  # roll when DTE <= this
+    roll_for_credit: bool = True  # only roll if net credit
+    close_before_expiration: bool = True  # never hold to expiry
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> ManagementRules:
@@ -95,11 +131,12 @@ class ManagementRules:
 @dataclass
 class StrategyFilters:
     """Entry filters for a strategy."""
-    iv_rank_min: float | None = None         # minimum IV rank to enter
+
+    iv_rank_min: float | None = None  # minimum IV rank to enter
     iv_rank_max: float | None = None
-    dte_range: tuple[int, int] = (30, 45)    # DTE range for entry
+    dte_range: tuple[int, int] = (30, 45)  # DTE range for entry
     delta_range: tuple[float, float] = (0.14, 0.18)  # delta per leg
-    spread_width: float | None = None        # for defined-risk strategies
+    spread_width: float | None = None  # for defined-risk strategies
     min_credit_to_width_ratio: float | None = None  # e.g. 0.33 for put spreads
     underlyings: list[str] = field(default_factory=list)
 
@@ -119,9 +156,10 @@ class StrategyFilters:
 @dataclass
 class StrategyAllocation:
     """Position sizing / allocation rules."""
-    max_bpr_pct: float = 30.0               # max % of BPR for this strategy
-    max_per_position_pct: float = 10.0       # max BPR per single position
-    max_positions: int = 5                   # max concurrent positions of this type
+
+    max_bpr_pct: float = 30.0  # max % of BPR for this strategy
+    max_per_position_pct: float = 10.0  # max BPR per single position
+    max_positions: int = 5  # max concurrent positions of this type
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> StrategyAllocation:
@@ -131,6 +169,7 @@ class StrategyAllocation:
 @dataclass
 class Strategy:
     """A fully defined, approved trading strategy."""
+
     id: str
     name: str
     structure: StrategyType
@@ -146,8 +185,11 @@ class Strategy:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Strategy:
         """Create a Strategy from a dictionary (e.g. from YAML)."""
-        data = {k: v for k, v in d.items()
-                if k not in ("filters", "management", "allocation", "structure")}
+        data = {
+            k: v
+            for k, v in d.items()
+            if k not in ("filters", "management", "allocation", "structure")
+        }
 
         # Parse structure enum
         structure_val = d.get("structure", "custom")
@@ -169,6 +211,7 @@ class Strategy:
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a dictionary suitable for YAML output."""
         from dataclasses import asdict
+
         d = asdict(self)
         d["structure"] = self.structure.value
         # Convert tuples back to lists for YAML
@@ -185,27 +228,28 @@ class ExtractedStrategyCandidate:
 
     This is NOT yet an approved Strategy. It needs human review first.
     """
+
     source_file: str
     trader_name: str
     show_name: str
     strategy_name: str
-    structure: str                           # raw string from LLM, mapped to StrategyType later
+    structure: str  # raw string from LLM, mapped to StrategyType later
     description: str
     underlyings: list[str] = field(default_factory=list)
-    iv_rank_filter: str = ""                 # e.g. "above 30"
-    dte_preference: str = ""                 # e.g. "30-45 DTE"
-    delta_targets: str = ""                  # e.g. "16 delta each side"
-    spread_width: str = ""                   # e.g. "$5 wide"
-    profit_target: str = ""                  # e.g. "50% of max profit"
-    loss_management: str = ""                # e.g. "2x credit received"
-    roll_rules: str = ""                     # e.g. "21 DTE, roll for credit"
-    position_sizing: str = ""               # e.g. "25% of BPR max"
+    iv_rank_filter: str = ""  # e.g. "above 30"
+    dte_preference: str = ""  # e.g. "30-45 DTE"
+    delta_targets: str = ""  # e.g. "16 delta each side"
+    spread_width: str = ""  # e.g. "$5 wide"
+    profit_target: str = ""  # e.g. "50% of max profit"
+    loss_management: str = ""  # e.g. "2x credit received"
+    roll_rules: str = ""  # e.g. "21 DTE, roll for credit"
+    position_sizing: str = ""  # e.g. "25% of BPR max"
     allocation_notes: str = ""
     win_rate_claimed: str = ""
     annual_return_claimed: str = ""
-    portfolio_greek_notes: str = ""          # any portfolio-level Greek guidance
+    portfolio_greek_notes: str = ""  # any portfolio-level Greek guidance
     key_quotes: list[str] = field(default_factory=list)
-    confidence: str = ""                     # how specific/confident was the source
+    confidence: str = ""  # how specific/confident was the source
 
     def summary(self) -> str:
         """One-line summary for display."""
@@ -217,8 +261,10 @@ class ExtractedStrategyCandidate:
 
 # ── Models for Modules 1-4 and Backtester ────────────────────────────
 
+
 class TradeAction(str, Enum):
     """Actions that can be taken on a position."""
+
     OPEN = "open"
     CLOSE = "close"
     ROLL = "roll"
@@ -243,6 +289,7 @@ class PlanDecision(str, Enum):
 @dataclass
 class Greeks:
     """Option Greeks for a single leg or aggregated portfolio."""
+
     delta: float = 0.0
     gamma: float = 0.0
     theta: float = 0.0
@@ -265,7 +312,12 @@ class Greeks:
         )
 
     def to_dict(self) -> dict[str, float]:
-        return {"delta": self.delta, "gamma": self.gamma, "theta": self.theta, "vega": self.vega}
+        return {
+            "delta": self.delta,
+            "gamma": self.gamma,
+            "theta": self.theta,
+            "vega": self.vega,
+        }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Greeks:
@@ -280,11 +332,12 @@ class Greeks:
 @dataclass
 class OptionLeg:
     """A single option leg in a position or order."""
+
     underlying: str
-    expiration: str                          # ISO date string
+    expiration: str  # ISO date string
     strike: float
-    option_type: str                         # "call" or "put"
-    side: str                                # "sell" or "buy"
+    option_type: str  # "call" or "put"
+    side: str  # "sell" or "buy"
     quantity: int = 1
 
     def to_dict(self) -> dict[str, Any]:
@@ -303,8 +356,84 @@ class OptionLeg:
 
 
 @dataclass
+class BrokerPositionLeg:
+    """A raw broker-reported option leg, persisted verbatim for audit and reconciliation.
+
+    This is the floor of truth. It is NEVER read by the optimizer or position manager —
+    those consume grouped Position objects. BrokerPositionLeg exists so that, if the
+    grouping layer ever drifts or misclassifies, we can always reconstruct exactly what
+    the broker thought we owned at sync time.
+    """
+
+    leg_id: str  # stable key; e.g. "public:acct_123:AAPL260515P00185000"
+    broker: str  # "public", "tastytrade", ...
+    account_id: str
+    occ_symbol: str
+    underlying: str
+    expiration: str  # ISO date
+    strike: float
+    option_type: str  # "call" | "put"
+    side: str  # "buy" (long) | "sell" (short) — derived from signed qty
+    quantity: int = 1  # absolute contract count
+    signed_quantity: float = (
+        0.0  # raw value from broker (positive = long, negative = short)
+    )
+    current_value: float = 0.0  # total dollar value reported by broker
+    total_cost: float = 0.0
+    unit_cost: float = 0.0
+    pnl_pct: float = 0.0
+    greeks: Greeks = field(default_factory=Greeks)
+    retrieved_at: str = ""
+    raw_payload: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "leg_id": self.leg_id,
+            "broker": self.broker,
+            "account_id": self.account_id,
+            "occ_symbol": self.occ_symbol,
+            "underlying": self.underlying,
+            "expiration": self.expiration,
+            "strike": self.strike,
+            "option_type": self.option_type,
+            "side": self.side,
+            "quantity": self.quantity,
+            "signed_quantity": self.signed_quantity,
+            "current_value": self.current_value,
+            "total_cost": self.total_cost,
+            "unit_cost": self.unit_cost,
+            "pnl_pct": self.pnl_pct,
+            "greeks": self.greeks.to_dict(),
+            "retrieved_at": self.retrieved_at,
+            "raw_payload": self.raw_payload,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> BrokerPositionLeg:
+        greeks = Greeks.from_dict(d.get("greeks", {}))
+        data = {
+            k: v
+            for k, v in d.items()
+            if k not in ("greeks",) and k in cls.__dataclass_fields__
+        }
+        return cls(greeks=greeks, **data)
+
+    def as_option_leg(self) -> OptionLeg:
+        """Project this raw leg as an OptionLeg suitable for grouping logic."""
+        return OptionLeg(
+            underlying=self.underlying,
+            expiration=self.expiration,
+            strike=self.strike,
+            option_type=self.option_type,
+            side=self.side,
+            quantity=self.quantity,
+        )
+
+
+@dataclass
 class OptionSnapshot:
     """A normalized option-market snapshot used for fixtures and scoring."""
+
     underlying: str
     timestamp: str
     option_type: str
@@ -344,13 +473,18 @@ class OptionSnapshot:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "OptionSnapshot":
-        data = {k: v for k, v in d.items() if k != "greeks" and k in cls.__dataclass_fields__}
+        data = {
+            k: v
+            for k, v in d.items()
+            if k != "greeks" and k in cls.__dataclass_fields__
+        }
         return cls(greeks=Greeks.from_dict(d.get("greeks", {})), **data)
 
 
 @dataclass
 class MarketSnapshot:
     """Underlying market state plus representative option quotes."""
+
     symbol: str
     timestamp: str
     underlying_price: float
@@ -380,7 +514,9 @@ class MarketSnapshot:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "MarketSnapshot":
-        items = [OptionSnapshot.from_dict(item) for item in d.get("option_snapshots", [])]
+        items = [
+            OptionSnapshot.from_dict(item) for item in d.get("option_snapshots", [])
+        ]
         data = {
             k: v
             for k, v in d.items()
@@ -392,31 +528,41 @@ class MarketSnapshot:
 @dataclass
 class TradeIdea:
     """A specific trade idea captured from daily content (Module 1 output)."""
+
     id: str
-    date: str                                # ISO date
+    date: str  # ISO date
     trader_name: str
     show_name: str
     underlying: str
-    strategy_type: str                       # maps to StrategyType
+    strategy_type: str  # maps to StrategyType
     description: str
     legs: list[OptionLeg] = field(default_factory=list)
     expiration: str = ""
     credit_target: float = 0.0
     rationale: str = ""
-    confidence: str = "medium"               # high / medium / low
+    confidence: str = "medium"  # high / medium / low
     source_url: str = ""
     source_timestamp: str = ""
-    status: str = IdeaStatus.NEW.value       # new / evaluated / approved / rejected / executed
+    status: str = (
+        IdeaStatus.NEW.value
+    )  # new / evaluated / approved / rejected / executed
 
     def to_dict(self) -> dict[str, Any]:
         d = {
-            "id": self.id, "date": self.date, "trader_name": self.trader_name,
-            "show_name": self.show_name, "underlying": self.underlying,
-            "strategy_type": self.strategy_type, "description": self.description,
+            "id": self.id,
+            "date": self.date,
+            "trader_name": self.trader_name,
+            "show_name": self.show_name,
+            "underlying": self.underlying,
+            "strategy_type": self.strategy_type,
+            "description": self.description,
             "legs": [l.to_dict() for l in self.legs],
-            "expiration": self.expiration, "credit_target": self.credit_target,
-            "rationale": self.rationale, "confidence": self.confidence,
-            "source_url": self.source_url, "source_timestamp": self.source_timestamp,
+            "expiration": self.expiration,
+            "credit_target": self.credit_target,
+            "rationale": self.rationale,
+            "confidence": self.confidence,
+            "source_url": self.source_url,
+            "source_timestamp": self.source_timestamp,
             "status": self.status,
         }
         return d
@@ -424,16 +570,28 @@ class TradeIdea:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> TradeIdea:
         legs = [OptionLeg.from_dict(l) for l in d.get("legs", [])]
-        data = {k: v for k, v in d.items() if k != "legs" and k in cls.__dataclass_fields__}
+        data = {
+            k: v for k, v in d.items() if k != "legs" and k in cls.__dataclass_fields__
+        }
         return cls(legs=legs, **data)
 
 
 @dataclass
 class Position:
-    """An open options position in the portfolio."""
+    """An open options position in the portfolio.
+
+    A Position represents a **trading unit** (the strategy bundle), not a single broker
+    leg. A vertical spread, iron condor, strangle, or naked short put is ONE Position
+    with a list of legs. This is the object the optimizer and position manager reason
+    about — all risk, diversification, and management decisions happen at this grain.
+
+    Raw broker legs live in a separate `broker_position_legs` table and are never read
+    by the trading brain.
+    """
+
     position_id: str
     underlying: str
-    strategy_id: str                         # links to Strategy.id
+    strategy_id: str  # links to Strategy.id in strategies.yaml (may be empty for inferred groups)
     legs: list[OptionLeg] = field(default_factory=list)
     open_date: str = ""
     open_credit: float = 0.0
@@ -442,39 +600,84 @@ class Position:
     dte_remaining: int = 0
     pnl_pct: float = 0.0
     status: str = PositionStatus.OPEN.value  # open / closed / rolled
-    bpr: float = 0.0                         # buying power reduction
+    bpr: float = 0.0  # buying power reduction
+
+    # ── Group metadata (added 2026-04: first-class position grouping layer) ──
+    group_id: str = (
+        ""  # durable anchor: Public orderId for Kamandal trades, deterministic id for inferred groups
+    )
+    source: str = PositionSource.MANUAL.value
+    strategy_type: str = (
+        ""  # structural classification (StrategyType.value), distinct from strategy_id
+    )
+    expirations: list[str] = field(default_factory=list)
+    quantity: int = 1  # multiplier — e.g. 2 iron condors share 4 legs at ratio 2
+    net_credit: float = 0.0  # net credit/debit received (dollars)
+    max_profit: float = 0.0  # 0.0 means undefined / not applicable
+    max_loss: float = 0.0  # may exceed bpr for undefined-risk structures
+    confidence: str = GroupConfidence.HIGH.value
+    management_status: str = ManagementStatus.AUTO.value
+    broker: str = ""
+    broker_order_id: str = (
+        ""  # Public orderId (UUID) for Kamandal-opened multi-leg orders
+    )
 
     @property
     def pnl_dollar(self) -> float:
         return self.open_credit - self.current_value
 
+    @property
+    def is_auto_managed(self) -> bool:
+        return self.management_status == ManagementStatus.AUTO.value
+
     def to_dict(self) -> dict[str, Any]:
         return {
-            "position_id": self.position_id, "underlying": self.underlying,
+            "position_id": self.position_id,
+            "underlying": self.underlying,
             "strategy_id": self.strategy_id,
             "legs": [l.to_dict() for l in self.legs],
-            "open_date": self.open_date, "open_credit": self.open_credit,
-            "current_value": self.current_value, "greeks": self.greeks.to_dict(),
-            "dte_remaining": self.dte_remaining, "pnl_pct": self.pnl_pct,
-            "status": self.status, "bpr": self.bpr,
+            "open_date": self.open_date,
+            "open_credit": self.open_credit,
+            "current_value": self.current_value,
+            "greeks": self.greeks.to_dict(),
+            "dte_remaining": self.dte_remaining,
+            "pnl_pct": self.pnl_pct,
+            "status": self.status,
+            "bpr": self.bpr,
+            "group_id": self.group_id,
+            "source": self.source,
+            "strategy_type": self.strategy_type,
+            "expirations": list(self.expirations),
+            "quantity": self.quantity,
+            "net_credit": self.net_credit,
+            "max_profit": self.max_profit,
+            "max_loss": self.max_loss,
+            "confidence": self.confidence,
+            "management_status": self.management_status,
+            "broker": self.broker,
+            "broker_order_id": self.broker_order_id,
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Position:
         legs = [OptionLeg.from_dict(l) for l in d.get("legs", [])]
         greeks = Greeks.from_dict(d.get("greeks", {}))
-        data = {k: v for k, v in d.items()
-                if k not in ("legs", "greeks") and k in cls.__dataclass_fields__}
+        data = {
+            k: v
+            for k, v in d.items()
+            if k not in ("legs", "greeks") and k in cls.__dataclass_fields__
+        }
         return cls(legs=legs, greeks=greeks, **data)
 
 
 @dataclass
 class PortfolioSnapshot:
     """Point-in-time snapshot of portfolio state."""
+
     timestamp: str = ""
     net_liquidation_value: float = 0.0
     greeks: Greeks = field(default_factory=Greeks)
-    beta_weighted_delta: float = 0.0         # SPY-equivalent
+    beta_weighted_delta: float = 0.0  # SPY-equivalent
     bpr_used: float = 0.0
     bpr_used_pct: float = 0.0
     theta_as_pct_nlv: float = 0.0
@@ -484,10 +687,12 @@ class PortfolioSnapshot:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "timestamp": self.timestamp, "nlv": self.net_liquidation_value,
+            "timestamp": self.timestamp,
+            "nlv": self.net_liquidation_value,
             "greeks": self.greeks.to_dict(),
             "beta_weighted_delta": self.beta_weighted_delta,
-            "bpr_used": self.bpr_used, "bpr_used_pct": self.bpr_used_pct,
+            "bpr_used": self.bpr_used,
+            "bpr_used_pct": self.bpr_used_pct,
             "theta_as_pct_nlv": self.theta_as_pct_nlv,
             "gamma_theta_ratio": self.gamma_theta_ratio,
             "position_count": self.position_count,
@@ -499,7 +704,9 @@ class PortfolioSnapshot:
         positions = [Position.from_dict(item) for item in d.get("positions", [])]
         data = {
             "timestamp": d.get("timestamp", ""),
-            "net_liquidation_value": float(d.get("net_liquidation_value", d.get("nlv", 0.0))),
+            "net_liquidation_value": float(
+                d.get("net_liquidation_value", d.get("nlv", 0.0))
+            ),
             "greeks": Greeks.from_dict(d.get("greeks", {})),
             "beta_weighted_delta": float(d.get("beta_weighted_delta", 0.0)),
             "bpr_used": float(d.get("bpr_used", 0.0)),
@@ -515,6 +722,7 @@ class PortfolioSnapshot:
 @dataclass
 class Order:
     """A trade order to be submitted or logged."""
+
     order_id: str
     action: TradeAction
     underlying: str
@@ -532,13 +740,19 @@ class Order:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "order_id": self.order_id, "action": self.action.value,
-            "underlying": self.underlying, "strategy_id": self.strategy_id,
+            "order_id": self.order_id,
+            "action": self.action.value,
+            "underlying": self.underlying,
+            "strategy_id": self.strategy_id,
             "legs": [l.to_dict() for l in self.legs],
-            "quantity": self.quantity, "limit_price": self.limit_price,
-            "status": self.status.value, "fill_price": self.fill_price,
-            "commission": self.commission, "filled_at": self.filled_at,
-            "dry_run": self.dry_run, "optimizer_score": self.optimizer_score,
+            "quantity": self.quantity,
+            "limit_price": self.limit_price,
+            "status": self.status.value,
+            "fill_price": self.fill_price,
+            "commission": self.commission,
+            "filled_at": self.filled_at,
+            "dry_run": self.dry_run,
+            "optimizer_score": self.optimizer_score,
             "notes": self.notes,
         }
 
@@ -565,7 +779,8 @@ class Order:
 @dataclass
 class OptimizerResult:
     """Output of the portfolio optimizer for a single candidate combination."""
-    combo_ids: list[str]                     # TradeIdea IDs in this combo
+
+    combo_ids: list[str]  # TradeIdea IDs in this combo
     score: float = 0.0
     delta_before: float = 0.0
     delta_after: float = 0.0
@@ -579,10 +794,14 @@ class OptimizerResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "combo_ids": self.combo_ids, "score": self.score,
-            "delta_before": self.delta_before, "delta_after": self.delta_after,
-            "gamma_before": self.gamma_before, "gamma_after": self.gamma_after,
-            "theta_before": self.theta_before, "theta_after": self.theta_after,
+            "combo_ids": self.combo_ids,
+            "score": self.score,
+            "delta_before": self.delta_before,
+            "delta_after": self.delta_after,
+            "gamma_before": self.gamma_before,
+            "gamma_after": self.gamma_after,
+            "theta_before": self.theta_before,
+            "theta_after": self.theta_after,
             "diversification_score": self.diversification_score,
             "passes_constraints": self.passes_constraints,
             "constraint_violations": self.constraint_violations,
@@ -592,6 +811,7 @@ class OptimizerResult:
 @dataclass
 class BacktestResult:
     """Result of backtesting a single strategy."""
+
     strategy_id: str
     test_date: str
     period_start: str
@@ -604,7 +824,7 @@ class BacktestResult:
     total_pnl: float = 0.0
     max_drawdown_pct: float = 0.0
     sharpe_ratio: float = 0.0
-    theta_efficiency: float = 0.0            # actual PnL / theoretical theta
+    theta_efficiency: float = 0.0  # actual PnL / theoretical theta
     approved: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -614,6 +834,7 @@ class BacktestResult:
 @dataclass
 class RegimePolicy:
     """Policy controls applied to candidate selection by market regime."""
+
     regime: MarketRegime
     prefer_structures: list[str] = field(default_factory=list)
     avoid_structures: list[str] = field(default_factory=list)
@@ -648,6 +869,7 @@ class RegimePolicy:
 @dataclass
 class CandidatePosition:
     """A scored, strategy-aligned position candidate derived from a trade idea."""
+
     idea_id: str
     strategy_id: str
     underlying: str
@@ -701,6 +923,7 @@ class CandidatePosition:
 @dataclass
 class ConstraintCheck:
     """Single hard-constraint evaluation result."""
+
     name: str
     passed: bool
     actual: float
@@ -715,6 +938,7 @@ class ConstraintCheck:
 @dataclass
 class ComboScore:
     """Composite scoring record for a candidate combination."""
+
     combo_ids: list[str]
     candidate_positions: list[CandidatePosition]
     total_score: float
@@ -731,7 +955,9 @@ class ComboScore:
     def to_dict(self) -> dict[str, Any]:
         return {
             "combo_ids": self.combo_ids,
-            "candidate_positions": [item.to_dict() for item in self.candidate_positions],
+            "candidate_positions": [
+                item.to_dict() for item in self.candidate_positions
+            ],
             "total_score": self.total_score,
             "component_scores": self.component_scores,
             "projected_portfolio": self.projected_portfolio.to_dict(),
@@ -745,11 +971,14 @@ class ComboScore:
         return cls(
             combo_ids=list(d.get("combo_ids", [])),
             candidate_positions=[
-                CandidatePosition.from_dict(item) for item in d.get("candidate_positions", [])
+                CandidatePosition.from_dict(item)
+                for item in d.get("candidate_positions", [])
             ],
             total_score=float(d.get("total_score", 0.0)),
             component_scores=dict(d.get("component_scores", {})),
-            projected_portfolio=PortfolioSnapshot.from_dict(d.get("projected_portfolio", {})),
+            projected_portfolio=PortfolioSnapshot.from_dict(
+                d.get("projected_portfolio", {})
+            ),
             constraint_checks=[
                 ConstraintCheck(**item) for item in d.get("constraint_checks", [])
             ],
@@ -761,6 +990,7 @@ class ComboScore:
 @dataclass
 class TradePlan:
     """Approved or rejected optimizer decision package."""
+
     plan_id: str
     created_at: str
     decision: PlanDecision
@@ -780,7 +1010,9 @@ class TradePlan:
             "regime": self.regime,
             "selected_combo_ids": self.selected_combo_ids,
             "ranked_combos": [item.to_dict() for item in self.ranked_combos],
-            "candidate_positions": [item.to_dict() for item in self.candidate_positions],
+            "candidate_positions": [
+                item.to_dict() for item in self.candidate_positions
+            ],
             "reasoning": self.reasoning,
             "risk_flags": self.risk_flags,
             "status": self.status,
@@ -792,12 +1024,19 @@ class TradePlan:
         return cls(
             plan_id=d.get("plan_id", ""),
             created_at=d.get("created_at", ""),
-            decision=decision if isinstance(decision, PlanDecision) else PlanDecision(decision),
+            decision=(
+                decision
+                if isinstance(decision, PlanDecision)
+                else PlanDecision(decision)
+            ),
             regime=d.get("regime", MarketRegime.UNKNOWN.value),
             selected_combo_ids=list(d.get("selected_combo_ids", [])),
-            ranked_combos=[ComboScore.from_dict(item) for item in d.get("ranked_combos", [])],
+            ranked_combos=[
+                ComboScore.from_dict(item) for item in d.get("ranked_combos", [])
+            ],
             candidate_positions=[
-                CandidatePosition.from_dict(item) for item in d.get("candidate_positions", [])
+                CandidatePosition.from_dict(item)
+                for item in d.get("candidate_positions", [])
             ],
             reasoning=d.get("reasoning", ""),
             risk_flags=list(d.get("risk_flags", [])),
@@ -808,6 +1047,7 @@ class TradePlan:
 @dataclass
 class PendingOrder:
     """Dry-run or pending execution artifact emitted by the executor."""
+
     pending_order_id: str
     plan_id: str
     created_at: str
@@ -886,6 +1126,7 @@ class PendingOrder:
 @dataclass
 class ReplayTrade:
     """Normalized historical replay trade imported from fixtures."""
+
     trade_id: str
     underlying: str
     symbol: str
@@ -933,6 +1174,7 @@ class ReplayTrade:
 @dataclass
 class ReplayResult:
     """Replay/backtest summary for gating strategy readiness."""
+
     strategy_id: str
     evaluated_at: str
     total_trades: int
@@ -955,6 +1197,7 @@ class ReplayResult:
 @dataclass
 class RawSourceDocument:
     """Normalized raw source content captured before idea extraction."""
+
     document_id: str
     source_type: str
     source_name: str

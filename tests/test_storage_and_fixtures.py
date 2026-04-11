@@ -54,8 +54,7 @@ def test_local_store_round_trip(tmp_path):
 def test_fixture_builder_imports_gds_and_replay(tmp_path):
     db_path = tmp_path / "gds_history.db"
     conn = sqlite3.connect(db_path)
-    conn.executescript(
-        """
+    conn.executescript("""
         CREATE TABLE market_observations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,
@@ -85,8 +84,7 @@ def test_fixture_builder_imports_gds_and_replay(tmp_path):
             put_iv REAL,
             put_gds REAL
         );
-        """
-    )
+        """)
     conn.execute(
         """
         INSERT INTO market_observations (
@@ -96,9 +94,29 @@ def test_fixture_builder_imports_gds_and_replay(tmp_path):
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            "2026-04-01T14:00:00+00:00", "SPY", 520.0, 525.0, 2.1, 2.3, 2.2,
-            0.32, 0.05, 0.08, 0.12, 0.24, 0.1, 515.0,
-            1.9, 2.1, 2.0, -0.28, 0.04, 0.09, 0.11, 0.26, 0.08,
+            "2026-04-01T14:00:00+00:00",
+            "SPY",
+            520.0,
+            525.0,
+            2.1,
+            2.3,
+            2.2,
+            0.32,
+            0.05,
+            0.08,
+            0.12,
+            0.24,
+            0.1,
+            515.0,
+            1.9,
+            2.1,
+            2.0,
+            -0.28,
+            0.04,
+            0.09,
+            0.11,
+            0.26,
+            0.08,
         ),
     )
     conn.commit()
@@ -115,8 +133,18 @@ def test_fixture_builder_imports_gds_and_replay(tmp_path):
                     "is_winner": True,
                     "entry_price": 1.1,
                     "exit_price": 0.9,
-                    "entry_greeks": {"delta": -0.25, "gamma": 0.04, "theta": 0.08, "vega": 0.1},
-                    "terminal_greeks": {"delta": -0.2, "gamma": 0.03, "theta": 0.06, "vega": 0.08},
+                    "entry_greeks": {
+                        "delta": -0.25,
+                        "gamma": 0.04,
+                        "theta": 0.08,
+                        "vega": 0.1,
+                    },
+                    "terminal_greeks": {
+                        "delta": -0.2,
+                        "gamma": 0.03,
+                        "theta": 0.06,
+                        "vega": 0.08,
+                    },
                 }
             ]
         ),

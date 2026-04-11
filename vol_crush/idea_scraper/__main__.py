@@ -27,11 +27,18 @@ from vol_crush.idea_scraper.scraper import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Vol Crush — Module 1: Idea Scraper")
     parser.add_argument(
-        "--mode", choices=["live", "record", "transcript"], required=True,
+        "--mode",
+        choices=["live", "record", "transcript"],
+        required=True,
         help="live=capture mic audio; record=process audio file; transcript=process text file",
     )
     parser.add_argument("--file", type=Path, help="Audio or transcript file path")
-    parser.add_argument("--duration", type=int, default=300, help="Recording duration in seconds (live mode)")
+    parser.add_argument(
+        "--duration",
+        type=int,
+        default=300,
+        help="Recording duration in seconds (live mode)",
+    )
     parser.add_argument("--source", default="YouTube", help="Content source label")
     parser.add_argument("--config", type=Path, default=None)
     return parser.parse_args()
@@ -48,7 +55,9 @@ def main() -> None:
         logger.error("OpenAI API key not configured.")
         sys.exit(1)
 
-    llm = LLMClient(api_key=openai_key, model=config.get("openai", {}).get("model", "gpt-4o"))
+    llm = LLMClient(
+        api_key=openai_key, model=config.get("openai", {}).get("model", "gpt-4o")
+    )
     store = build_local_store(config)
 
     if args.mode == "live":
@@ -79,14 +88,22 @@ def main() -> None:
     # Output results
     logger.info("Captured %d trade ideas:", len(ideas))
     for idea in ideas:
-        logger.info("  [%s] %s %s on %s — %s",
-                     idea.confidence, idea.trader_name, idea.strategy_type,
-                     idea.underlying, idea.description[:60])
+        logger.info(
+            "  [%s] %s %s on %s — %s",
+            idea.confidence,
+            idea.trader_name,
+            idea.strategy_type,
+            idea.underlying,
+            idea.description[:60],
+        )
 
     store.save_trade_ideas(ideas)
     logger.info(
         "Ideas saved to local store at %s",
-        get_project_root() / config.get("storage", {}).get("local", {}).get("sqlite_path", "data/vol_crush.db"),
+        get_project_root()
+        / config.get("storage", {})
+        .get("local", {})
+        .get("sqlite_path", "data/vol_crush.db"),
     )
 
 

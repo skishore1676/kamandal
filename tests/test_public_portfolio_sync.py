@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+from vol_crush.core.models import (
+    Greeks,
+    ManagementStatus,
+    OptionLeg,
+    PendingOrder,
+    PositionSource,
+    StrategyType,
+    TradeAction,
+)
 from vol_crush.integrations.public_broker import parse_occ_symbol
 from vol_crush.integrations.storage import LocalStore
 from vol_crush.portfolio_sync.service import sync_public_portfolio
 
 
 class FakePublicSyncAdapter:
+    """Reports a bull call debit spread on AAPL: long 200C, short 210C, same expiry."""
+
     def get_portfolio(self) -> dict:
         return {
             "accountId": "acct_123",
@@ -16,8 +27,16 @@ class FakePublicSyncAdapter:
             },
             "equity": [
                 {"type": "CASH", "value": "4000.00", "percentageOfPortfolio": "40.0"},
-                {"type": "OPTIONS_LONG", "value": "900.00", "percentageOfPortfolio": "9.0"},
-                {"type": "OPTIONS_SHORT", "value": "-200.00", "percentageOfPortfolio": "-2.0"},
+                {
+                    "type": "OPTIONS_LONG",
+                    "value": "900.00",
+                    "percentageOfPortfolio": "9.0",
+                },
+                {
+                    "type": "OPTIONS_SHORT",
+                    "value": "-200.00",
+                    "percentageOfPortfolio": "-2.0",
+                },
             ],
             "positions": [
                 {
@@ -49,6 +68,9 @@ class FakePublicSyncAdapter:
             ],
         }
 
+    def get_primary_account_id(self) -> str:
+        return "acct_123"
+
     def get_option_greeks_batch(self, option_symbols: list[str]) -> dict[str, dict]:
         assert sorted(option_symbols) == [
             "AAPL260515C00200000",
@@ -78,7 +100,8 @@ def test_parse_occ_symbol() -> None:
     assert parsed["strike"] == 200.0
 
 
-def test_sync_public_portfolio_persists_positions_and_snapshot(tmp_path) -> None:
+def test_sync_public_portfolio_groups_debit_call_spread(tmp_path) -> None:
+    """A long 200 call + short 210 call should become ONE call_spread group, not two positions."""
     config = {
         "storage": {
             "local": {
@@ -87,16 +110,89 @@ def test_sync_public_portfolio_persists_positions_and_snapshot(tmp_path) -> None
             }
         }
     }
-    store = LocalStore(sqlite_path=tmp_path / "kamandal.db", audit_dir=tmp_path / "audit")
+    store = LocalStore(
+        sqlite_path=tmp_path / "kamandal.db", audit_dir=tmp_path / "audit"
+    )
 
-    snapshot = sync_public_portfolio(config, store=store, adapter=FakePublicSyncAdapter())
+    snapshot = sync_public_portfolio(
+        config, store=store, adapter=FakePublicSyncAdapter()
+    )
 
+    # Grouped view
     positions = store.list_positions()
-    assert len(positions) == 2
-    assert positions[0].strategy_id == "public_imported_option"
+    assert len(positions) == 1, "Two call legs must group into exactly one call spread"
+    group = positions[0]
+    assert group.strategy_type == StrategyType.CALL_SPREAD.value
+    assert group.source == PositionSource.PUBLIC_INFERRED.value
+    assert group.management_status == ManagementStatus.AUTO.value
+    assert group.underlying == "AAPL"
+    assert len(group.legs) == 2
+
+    # Position count in the snapshot now reflects groups, not legs
+    assert snapshot.position_count == 1
     assert snapshot.net_liquidation_value == 4700.0
-    assert snapshot.position_count == 2
+
+    # Aggregate greeks still sum correctly across the two legs
     assert round(snapshot.greeks.delta, 4) == 0.2
     assert round(snapshot.greeks.gamma, 4) == 0.02
     assert round(snapshot.greeks.theta, 4) == -0.03
     assert round(snapshot.greeks.vega, 4) == 0.05
+
+    # Raw legs are preserved in the audit floor
+    raw_legs = store.list_broker_legs(broker="public")
+    assert len(raw_legs) == 2
+    assert {leg.occ_symbol for leg in raw_legs} == {
+        "AAPL260515C00200000",
+        "AAPL260515C00210000",
+    }
+
+
+def test_sync_public_portfolio_rehydrates_kamandal_opened_group(tmp_path) -> None:
+    """A pending order with a stamped broker_order_id matching the live legs should
+    cause the sync to produce a source=kamandal_order Position carrying the anchor."""
+    config = {
+        "storage": {
+            "local": {
+                "sqlite_path": str(tmp_path / "kamandal.db"),
+                "audit_dir": str(tmp_path / "audit"),
+            }
+        }
+    }
+    store = LocalStore(
+        sqlite_path=tmp_path / "kamandal.db", audit_dir=tmp_path / "audit"
+    )
+
+    # Seed a pending order whose legs match the fake adapter's debit call spread.
+    known = PendingOrder(
+        pending_order_id="pending_live_1",
+        plan_id="plan_1",
+        created_at="2026-04-03T12:00:00Z",
+        action=TradeAction.OPEN,
+        status="pending",
+        underlying="AAPL",
+        strategy_id="aapl_debit_spread",
+        quantity=1,
+        target_price=7.00,
+        estimated_credit=-700.0,
+        estimated_bpr=700.0,
+        greeks_impact=Greeks(),
+        legs=[
+            OptionLeg("AAPL", "2026-05-15", 200.0, "call", "buy"),
+            OptionLeg("AAPL", "2026-05-15", 210.0, "call", "sell"),
+        ],
+        broker="public",
+        broker_order_id="kamandal-anchor-42",
+        broker_response={"buyingPowerRequirement": "700.00"},
+    )
+    store.save_pending_orders([known])
+
+    sync_public_portfolio(config, store=store, adapter=FakePublicSyncAdapter())
+
+    positions = store.list_positions()
+    assert len(positions) == 1
+    group = positions[0]
+    assert group.source == PositionSource.KAMANDAL_ORDER.value
+    assert group.broker_order_id == "kamandal-anchor-42"
+    assert group.strategy_id == "aapl_debit_spread"
+    # Preflight BPR from the known order should override the inference formula.
+    assert group.bpr == 700.0
