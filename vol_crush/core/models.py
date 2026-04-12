@@ -181,6 +181,8 @@ class Strategy:
     dry_run_passed: bool = False
     source_traders: list[str] = field(default_factory=list)
     consensus_notes: str = ""
+    allowed_regimes: list[str] = field(default_factory=list)
+    avoid_earnings: bool = False
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Strategy:
@@ -189,6 +191,7 @@ class Strategy:
             k: v
             for k, v in d.items()
             if k not in ("filters", "management", "allocation", "structure")
+            and k in cls.__dataclass_fields__
         }
 
         # Parse structure enum
@@ -220,6 +223,146 @@ class Strategy:
                 if k in d["filters"] and isinstance(d["filters"][k], tuple):
                     d["filters"][k] = list(d["filters"][k])
         return d
+
+
+@dataclass
+class StrategyTemplate:
+    """Structure-level strategy definition from strategy_templates.yaml.
+
+    A template describes HOW to build a particular options structure — management
+    rules, entry filters, regime eligibility. It does NOT say which tickers to use
+    (that comes from UnderlyingProfile) or how much capital to allocate (also from
+    the profile). At resolution time, template + profile → Strategy.
+    """
+
+    id: str
+    name: str
+    structure: StrategyType
+    description: str = ""
+    filters: StrategyFilters = field(default_factory=StrategyFilters)
+    management: ManagementRules = field(default_factory=ManagementRules)
+    allowed_regimes: list[str] = field(default_factory=list)
+    avoid_earnings: bool = True
+    backtest_approved: bool = False
+    dry_run_passed: bool = False
+    source_traders: list[str] = field(default_factory=list)
+    consensus_notes: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> StrategyTemplate:
+        data = {
+            k: v
+            for k, v in d.items()
+            if k not in ("filters", "management", "structure", "allowed_regimes")
+            and k in cls.__dataclass_fields__
+        }
+        structure_val = d.get("structure", "custom")
+        try:
+            data["structure"] = StrategyType(structure_val)
+        except ValueError:
+            data["structure"] = StrategyType.CUSTOM
+        if "filters" in d and isinstance(d["filters"], dict):
+            data["filters"] = StrategyFilters.from_dict(d["filters"])
+        if "management" in d and isinstance(d["management"], dict):
+            data["management"] = ManagementRules.from_dict(d["management"])
+        data["allowed_regimes"] = list(d.get("allowed_regimes", []))
+        return cls(**data)
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        d["structure"] = self.structure.value
+        if "filters" in d:
+            for k in ("dte_range", "delta_range"):
+                if k in d["filters"] and isinstance(d["filters"][k], tuple):
+                    d["filters"][k] = list(d["filters"][k])
+        return d
+
+
+@dataclass
+class UnderlyingProfile:
+    """Universe grouping from underlying_profiles.yaml.
+
+    Describes a category of underlyings (index ETFs, bond ETFs, etc.) and the
+    risk/allocation constraints that apply to all symbols in the group. The
+    optimizer uses profiles to decide which structures are eligible for a ticker
+    and how much capital to allocate.
+    """
+
+    profile_id: str
+    name: str = ""
+    symbols: list[str] = field(default_factory=list)
+    allowed_structures: list[str] = field(default_factory=list)
+    max_bpr_pct: float = 15.0
+    max_per_position_pct: float = 10.0
+    max_positions: int = 3
+    earnings_sensitive: bool = True
+    min_option_volume: int = 0
+    min_open_interest: int = 0
+    notes: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> UnderlyingProfile:
+        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def resolve_strategy(
+    template: StrategyTemplate, profile: UnderlyingProfile
+) -> Strategy:
+    """Merge a template with a profile to produce a runtime Strategy.
+
+    Template provides: structure, entry filters, management rules, regime eligibility.
+    Profile provides: underlyings list, allocation caps.
+    The resulting Strategy is the object the optimizer and position_manager consume.
+    """
+    filters = StrategyFilters(
+        iv_rank_min=template.filters.iv_rank_min,
+        iv_rank_max=template.filters.iv_rank_max,
+        dte_range=template.filters.dte_range,
+        delta_range=template.filters.delta_range,
+        spread_width=template.filters.spread_width,
+        min_credit_to_width_ratio=template.filters.min_credit_to_width_ratio,
+        underlyings=list(profile.symbols),
+    )
+    allocation = StrategyAllocation(
+        max_bpr_pct=profile.max_bpr_pct,
+        max_per_position_pct=profile.max_per_position_pct,
+        max_positions=profile.max_positions,
+    )
+    return Strategy(
+        id=f"{template.id}:{profile.profile_id}",
+        name=template.name,
+        structure=template.structure,
+        description=template.description,
+        filters=filters,
+        management=template.management,
+        allocation=allocation,
+        backtest_approved=template.backtest_approved,
+        dry_run_passed=template.dry_run_passed,
+        source_traders=list(template.source_traders),
+        consensus_notes=template.consensus_notes,
+        allowed_regimes=list(template.allowed_regimes),
+        avoid_earnings=template.avoid_earnings,
+    )
+
+
+def resolve_all_strategies(
+    templates: list[StrategyTemplate],
+    profiles: list[UnderlyingProfile],
+) -> list[Strategy]:
+    """Produce one resolved Strategy per (template, eligible profile) pair.
+
+    A template is eligible for a profile if the template's structure is in the
+    profile's allowed_structures. This is the cross-product that feeds the optimizer.
+    """
+    resolved: list[Strategy] = []
+    for template in templates:
+        for profile in profiles:
+            if template.structure.value in profile.allowed_structures:
+                resolved.append(resolve_strategy(template, profile))
+    return resolved
 
 
 @dataclass

@@ -21,7 +21,12 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from vol_crush.core.config import load_config, load_strategies
+from vol_crush.core.config import (
+    load_config,
+    load_strategies,
+    load_strategy_templates,
+    load_underlying_profiles,
+)
 from vol_crush.core.logging import setup_logging
 from vol_crush.core.models import (
     Greeks,
@@ -31,7 +36,10 @@ from vol_crush.core.models import (
     Position,
     PositionStatus,
     Strategy,
+    StrategyTemplate,
     TradeAction,
+    UnderlyingProfile,
+    resolve_all_strategies,
 )
 from vol_crush.integrations.storage import build_local_store
 
@@ -39,6 +47,12 @@ logger = logging.getLogger("vol_crush.position_manager")
 
 
 def _strategy_map() -> dict[str, Strategy]:
+    """Load resolved strategies from templates + profiles, falling back to legacy strategies.yaml."""
+    templates = [StrategyTemplate.from_dict(d) for d in load_strategy_templates() if d]
+    profiles = [UnderlyingProfile.from_dict(d) for d in load_underlying_profiles() if d]
+    resolved = resolve_all_strategies(templates, profiles)
+    if resolved:
+        return {s.id: s for s in resolved}
     return {item["id"]: Strategy.from_dict(item) for item in load_strategies()}
 
 

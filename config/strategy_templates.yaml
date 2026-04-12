@@ -1,0 +1,198 @@
+# Kamandal - Strategy Templates
+#
+# Each template defines a structure-level trading pattern: entry filters,
+# management rules, regime eligibility, and earnings avoidance. Templates
+# are *underlying-agnostic* — which tickers a template can be instantiated
+# on is determined by underlying_profiles.yaml.
+#
+# At resolution time: template + profile → Strategy (what the optimizer uses).
+# Multiple profiles can match one template, producing one resolved Strategy
+# per (template, profile) pair where the profile's allowed_structures includes
+# the template's structure.
+
+templates:
+
+  # ── Defined-risk credit structures (the backbone) ────────────────────────
+
+  - id: put_spread_standard
+    name: "Standard bull put credit spread"
+    structure: put_spread
+    description: >-
+      Sell the 14-18 delta put, buy protection one width below. Classic
+      tastytrade defined-risk premium collection. Works on any liquid underlying
+      with elevated IV rank.
+    filters:
+      iv_rank_min: 25
+      dte_range: [30, 45]
+      delta_range: [0.14, 0.18]
+      spread_width: 5
+      min_credit_to_width_ratio: 0.33
+    management:
+      profit_target_pct: 50
+      max_loss_multiple: 2.0
+      roll_dte_trigger: 21
+      roll_for_credit: true
+      close_before_expiration: true
+    allowed_regimes: [high_iv, normal_iv]
+    avoid_earnings: true
+    backtest_approved: false
+    dry_run_passed: false
+    consensus_notes: >-
+      Most-researched tastylive setup. 1/3 credit-to-width minimum ensures
+      risk/reward stays acceptable even in modest-IV environments.
+
+  - id: call_spread_standard
+    name: "Standard bear call credit spread"
+    structure: call_spread
+    description: >-
+      Sell the 14-18 delta call, buy protection one width above. Mirror of the
+      bull put spread for bearish/neutral bias. Used to balance portfolio delta
+      when the book is too long.
+    filters:
+      iv_rank_min: 25
+      dte_range: [30, 45]
+      delta_range: [0.14, 0.18]
+      spread_width: 5
+      min_credit_to_width_ratio: 0.33
+    management:
+      profit_target_pct: 50
+      max_loss_multiple: 2.0
+      roll_dte_trigger: 21
+      roll_for_credit: true
+      close_before_expiration: true
+    allowed_regimes: [high_iv, normal_iv]
+    avoid_earnings: true
+    backtest_approved: false
+    dry_run_passed: false
+    consensus_notes: >-
+      Use sparingly — equity markets have a long-term upward bias, so selling
+      calls requires stronger conviction or portfolio-delta justification.
+
+  - id: iron_condor_standard
+    name: "Standard iron condor"
+    structure: iron_condor
+    description: >-
+      Sell both a put spread and a call spread at 12-16 delta on the same
+      underlying and expiration. Fully defined risk on both sides. Best when
+      the underlying is range-bound and IV is elevated.
+    filters:
+      iv_rank_min: 30
+      dte_range: [30, 45]
+      delta_range: [0.12, 0.16]
+      spread_width: 5
+      min_credit_to_width_ratio: 0.25
+    management:
+      profit_target_pct: 50
+      max_loss_multiple: 2.0
+      roll_dte_trigger: 21
+      roll_for_credit: true
+      close_before_expiration: true
+    allowed_regimes: [high_iv, normal_iv]
+    avoid_earnings: true
+    backtest_approved: false
+    dry_run_passed: false
+    consensus_notes: >-
+      Higher IV threshold than verticals because both sides need to collect
+      enough premium to justify the wider risk surface.
+
+  # ── Undefined-risk premium selling (small allocation, stable underlyings) ─
+
+  - id: short_put_conservative
+    name: "Conservative cash-backed short put"
+    structure: short_put
+    description: >-
+      Naked/cash-backed short put on stable, low-beta underlyings. 16-20 delta,
+      30-45 DTE. Sized small enough that assignment is within the portfolio risk
+      budget. Primary use is as a diversifying theta generator on non-equity
+      instruments like TLT.
+    filters:
+      iv_rank_min: 25
+      dte_range: [30, 45]
+      delta_range: [0.16, 0.20]
+    management:
+      profit_target_pct: 50
+      max_loss_multiple: 2.0
+      roll_dte_trigger: 21
+      roll_for_credit: true
+      close_before_expiration: true
+    allowed_regimes: [high_iv, normal_iv]
+    avoid_earnings: true
+    backtest_approved: false
+    dry_run_passed: false
+    consensus_notes: >-
+      Only on profiles that explicitly allow short_put (bond_etf, commodity_etf).
+      Never on single-name equities in a risk-averse book.
+
+  - id: short_strangle_high_iv
+    name: "Short strangle (high IV only)"
+    structure: short_strangle
+    description: >-
+      16-delta strangle on liquid underlyings during elevated IV. Undefined
+      risk both sides — only fires when premium is genuinely rich. Requires
+      high_iv regime and avoids earnings.
+    filters:
+      iv_rank_min: 35
+      dte_range: [30, 45]
+      delta_range: [0.14, 0.18]
+    management:
+      profit_target_pct: 50
+      max_loss_multiple: 2.0
+      roll_dte_trigger: 21
+      roll_for_credit: true
+      close_before_expiration: true
+    allowed_regimes: [high_iv]
+    avoid_earnings: true
+    backtest_approved: false
+    dry_run_passed: false
+    consensus_notes: >-
+      Gated behind high_iv only. This is a vol expansion bet — if IV is not
+      elevated, use a defined-risk structure instead.
+
+  # ── Specialty structures (lower priority, lower allocation) ──────────────
+
+  - id: jade_lizard_standard
+    name: "Jade lizard (no upside risk)"
+    structure: jade_lizard
+    description: >-
+      Short put + bear call spread where the net credit >= call spread width,
+      eliminating upside risk. Requires elevated IV to collect enough premium.
+    filters:
+      iv_rank_min: 35
+      dte_range: [30, 45]
+      delta_range: [0.14, 0.18]
+      spread_width: 5
+    management:
+      profit_target_pct: 50
+      max_loss_multiple: 2.0
+      roll_dte_trigger: 21
+      roll_for_credit: true
+      close_before_expiration: true
+    allowed_regimes: [high_iv]
+    avoid_earnings: true
+    backtest_approved: false
+    dry_run_passed: false
+
+  - id: calendar_spread_standard
+    name: "Calendar spread (vol expansion play)"
+    structure: calendar_spread
+    description: >-
+      Buy a longer-dated option, sell a shorter-dated option at the same strike.
+      Profits from time decay of the front leg and/or vol expansion of the back.
+    filters:
+      iv_rank_min: 15
+      iv_rank_max: 25
+      dte_range: [25, 60]
+      delta_range: [0.40, 0.55]
+    management:
+      profit_target_pct: 25
+      max_loss_multiple: 1.5
+      roll_dte_trigger: 14
+      roll_for_credit: false
+      close_before_expiration: true
+    allowed_regimes: [low_iv, normal_iv]
+    avoid_earnings: true
+    backtest_approved: false
+    dry_run_passed: false
+    consensus_notes: >-
+      Contrarian play for low-IV regimes. Lower profit target and tighter
+      loss management because calendars have narrower profit zones.

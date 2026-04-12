@@ -1,24 +1,11 @@
-# Kamandal - Strategy Definitions
-# This file is the source of truth for all approved trading strategies.
-# Strategies are extracted by Module 0 (Strategy Miner) and approved by human review.
-# Only strategies with backtest_approved: true AND dry_run_passed: true will be traded live.
+# DEPRECATED — strategy definitions have moved to a two-file architecture:
+#
+#   config/strategy_templates.yaml  → structure-level templates (how to build)
+#   config/underlying_profiles.yaml → universe groupings (where to apply, how much)
+#
+# At runtime, the resolver merges them: template + profile → Strategy.
+# This file is kept for backward compatibility with the backtester's
+# `backtest_approved` flag writer, which updates strategies by id.
+# It will be removed once the backtester is updated.
 
 strategies: []
-  # Example (uncomment and fill after Module 0 runs):
-  #
-  # - id: core_strangle
-  #   name: "Core Short Strangle"
-  #   structure: short_strangle
-  #   underlyings: [SPY, IWM, QQQ, TLT, GLD]
-  #   filters:
-  #     iv_rank_min: 30
-  #     dte_range: [30, 45]
-  #     delta_range: [0.14, 0.18]
-  #   management:
-  #     profit_target_pct: 50
-  #     max_loss_multiple: 2.0
-  #     roll_dte_trigger: 21
-  #   allocation:
-  #     max_bpr_pct: 30
-  #   backtest_approved: false
-  #   dry_run_passed: false

@@ -86,7 +86,9 @@ will use Public preflight/mock-style checks without placing live orders.
 kamandal/
 ├── config/
 │   ├── config.example.yaml
-│   └── strategies.yaml
+│   ├── strategy_templates.yaml    # structure-level strategy definitions
+│   ├── underlying_profiles.yaml   # universe groupings + allocation caps
+│   └── strategies.yaml            # legacy (deprecated, kept for compat)
 ├── data/
 │   ├── transcripts/
 │   ├── audio/
@@ -105,6 +107,8 @@ kamandal/
 │   ├── optimizer/
 │   ├── executor/
 │   ├── position_manager/
+│   ├── position_grouping/         # deterministic leg → strategy-bundle classifier
+│   ├── portfolio_sync/
 │   └── backtester/
 ├── tests/
 ├── requirements.txt
@@ -113,23 +117,26 @@ kamandal/
 
 ## Key Configuration
 
-Portfolio constraints in `config.yaml`:
+**Strategy config** (two-file model — see `config/`):
+- `strategy_templates.yaml`: structure-level templates (put_spread, iron_condor, short_put, ...) with entry filters, management, and regime eligibility
+- `underlying_profiles.yaml`: universe groupings (index_etf, bond_etf, commodity_etf) with symbols, allowed structures, and allocation caps
+- At runtime these are merged: template × eligible profile → resolved Strategy
 
+**Portfolio constraints** in `config.yaml`:
 - Beta-weighted delta: `±5%` of NLV
 - Daily theta: `0.1% – 0.3%` of NLV
 - Gamma/theta ratio: `< 1.5`
 - Max BPR utilization: `50%`
 - Max single underlying: `15%` of BPR
+- Orphan leg guard: blocks new opens when unclassified short legs exist
 
-Regime policy defaults:
-
+**Regime policy defaults:**
 - `high_iv`: favor premium selling
 - `normal_iv`: baseline premium selling
 - `low_iv`: prefer defined risk or no trade
 - `event_risk`: reject new exposure
 
-Idea source config:
-
+**Idea source config:**
 - `idea_sources.youtube.channel_ids`
 - `idea_sources.rss.feed_urls`
 - `idea_sources.web.urls`

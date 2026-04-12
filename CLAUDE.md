@@ -47,10 +47,10 @@ ruff check vol_crush tests
 
 ## Architecture
 
-Pipeline is a 5-module dry-run chain plus a replay gate; modules communicate via a shared `StorageBackend` (SQLite at `data/kamandal.db`) and JSON fixtures, not in-process calls. `vol_crush/main.py` orchestrates them in order.
+Modules communicate via a shared `StorageBackend` (SQLite at `data/kamandal.db`) and JSON fixtures, not in-process calls. `vol_crush/main.py` orchestrates the daily pipeline in order.
 
 ```
-strategy_miner   (one-time)   transcripts → LLM distill → config/strategies.yaml (human review)
+strategy_miner   (one-time)   transcripts → LLM distill → strategy candidates (human review)
 idea_sources     (adapters)   youtube/rss/web/transcripts → RawSourceDocument → LLM → TradeIdea
 integrations/fixtures         sibling repo data (public_api_trading_v3) + public seeds → fixture_bundle.json + replay_trades.json
 backtester                    replays ReplayTrade set against approved strategies (approval gate)
@@ -94,6 +94,15 @@ Safety rules enforced in code (not config):
 - `portfolio.constraints` are hard limits enforced in optimizer code (beta-weighted delta ±5% NLV, daily theta 0.10–0.30% NLV, |gamma/theta| < 1.5, BPR util < 50%, single underlying < 15% BPR, `max_orphan_legs` guard for ungrouped shorts).
 - `portfolio.regimes` (`high_iv` | `normal_iv` | `low_iv` | `event_risk`) drive which structures the optimizer prefers/avoids; `event_risk` rejects new exposure.
 - `data_sources.fixtures.import_gds_history_db` and `import_gds_analysis_json` point into the sibling `public_api_trading_v3` repo — fixtures builder reads those paths directly.
+
+### Strategy config (two-file model)
+
+Strategies are NOT defined per-ticker. Two files combine at resolution time:
+
+- **`config/strategy_templates.yaml`** — structure-level templates (put_spread, iron_condor, short_put, ...). Each template defines entry filters, management rules, regime eligibility, and earnings avoidance. Underlying-agnostic.
+- **`config/underlying_profiles.yaml`** — universe groupings (index_etf, bond_etf, commodity_etf). Each profile lists symbols, allowed structures, and allocation caps (max_bpr_pct, max_positions).
+
+At runtime: `resolve_all_strategies(templates, profiles)` produces one `Strategy` per eligible (template, profile) pair. The optimizer and position_manager consume these resolved `Strategy` objects. `config/strategies.yaml` is legacy — kept for backward compatibility but empty.
 
 ## Data Layout
 

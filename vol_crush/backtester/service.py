@@ -7,9 +7,22 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from vol_crush.core.config import load_config, load_strategies, save_strategies
+from vol_crush.core.config import (
+    load_config,
+    load_strategies,
+    load_strategy_templates,
+    load_underlying_profiles,
+    save_strategies,
+)
 from vol_crush.core.logging import setup_logging
-from vol_crush.core.models import BacktestResult, ReplayTrade, Strategy
+from vol_crush.core.models import (
+    BacktestResult,
+    ReplayTrade,
+    Strategy,
+    StrategyTemplate,
+    UnderlyingProfile,
+    resolve_all_strategies,
+)
 from vol_crush.integrations.fixtures import load_replay_trades
 from vol_crush.integrations.storage import build_local_store
 
@@ -76,23 +89,23 @@ def evaluate_strategy(
     )
 
 
+def _load_resolved_strategies() -> list[Strategy]:
+    """Load strategies via template+profile resolution, falling back to legacy."""
+    templates = [StrategyTemplate.from_dict(d) for d in load_strategy_templates() if d]
+    profiles = [UnderlyingProfile.from_dict(d) for d in load_underlying_profiles() if d]
+    resolved = resolve_all_strategies(templates, profiles)
+    if resolved:
+        return resolved
+    return [Strategy.from_dict(item) for item in load_strategies() if item]
+
+
 def run_backtests(config: dict) -> list[BacktestResult]:
     store = build_local_store(config)
-    raw_strategies = load_strategies()
-    strategies = [Strategy.from_dict(item) for item in raw_strategies]
+    strategies = _load_resolved_strategies()
     trades = store.list_replay_trades() or load_replay_trades(config)
     results = [evaluate_strategy(strategy, trades, config) for strategy in strategies]
     for result in results:
         store.save_backtest_result(result)
-    if raw_strategies:
-        for item in raw_strategies:
-            matching = next(
-                (result for result in results if result.strategy_id == item.get("id")),
-                None,
-            )
-            if matching:
-                item["backtest_approved"] = matching.approved
-        save_strategies(raw_strategies)
     return results
 
 

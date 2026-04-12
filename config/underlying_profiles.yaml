@@ -1,0 +1,81 @@
+# Kamandal - Underlying Profiles
+#
+# Each profile describes a universe of tickers and the risk/allocation rules
+# that apply to all of them. The optimizer resolves strategy templates against
+# profiles to determine which structures are eligible for each underlying and
+# how much capital to allocate.
+#
+# Hierarchy:
+#   1. strategy_templates.yaml  → HOW to build a structure (filters, management, regimes)
+#   2. underlying_profiles.yaml → WHERE to apply it (tickers, allocation, liquidity)
+#   3. (future) symbol_overrides → per-ticker exceptions (not implemented yet)
+#
+# allowed_structures lists StrategyType values. A template whose structure is
+# NOT in a profile's allowed_structures will never be instantiated on that
+# profile's symbols.
+
+profiles:
+
+  # ── Broad-market index ETFs ─────────────────────────────────────────────
+  # The most liquid options in the world. Tight bid-ask, no earnings risk,
+  # no single-company blowup risk. This is where the bulk of the book lives.
+  - profile_id: index_etf
+    name: "Index ETFs (SPY, QQQ, IWM)"
+    symbols: [SPY, QQQ, IWM]
+    allowed_structures:
+      - put_spread
+      - call_spread
+      - iron_condor
+      - short_strangle
+      - jade_lizard
+    max_bpr_pct: 20
+    max_per_position_pct: 10
+    max_positions: 4
+    earnings_sensitive: false
+    min_option_volume: 1000
+    min_open_interest: 5000
+    notes: >-
+      Core allocation. SPY/QQQ for directional neutral, IWM for rangebound
+      iron condors. No earnings to worry about.
+
+  # ── Bond ETFs ───────────────────────────────────────────────────────────
+  # Low correlation to equity beta. TLT moves slowly, rarely gaps, and
+  # provides theta without increasing equity risk. Small allocation because
+  # bond vol regimes can shift quietly.
+  - profile_id: bond_etf
+    name: "Bond ETFs (TLT, IEF)"
+    symbols: [TLT, IEF]
+    allowed_structures:
+      - short_put
+      - put_spread
+    max_bpr_pct: 10
+    max_per_position_pct: 10
+    max_positions: 2
+    earnings_sensitive: false
+    min_option_volume: 200
+    min_open_interest: 1000
+    notes: >-
+      Diversifier. Short puts only on bonds because the upside move is
+      capped by duration, and credit spreads provide additional downside
+      protection if needed.
+
+  # ── Commodity ETFs ──────────────────────────────────────────────────────
+  # GLD and SLV move independently of equity and bond markets. Useful for
+  # decorrelation. Thinner option liquidity than index ETFs — keep it small.
+  - profile_id: commodity_etf
+    name: "Commodity ETFs (GLD, SLV)"
+    symbols: [GLD, SLV]
+    allowed_structures:
+      - put_spread
+      - short_put
+      - calendar_spread
+    max_bpr_pct: 8
+    max_per_position_pct: 8
+    max_positions: 2
+    earnings_sensitive: false
+    min_option_volume: 200
+    min_open_interest: 500
+    notes: >-
+      Decorrelation play. Calendar spreads allowed here because commodity
+      vol often mean-reverts predictably, making the structure viable
+      even at low absolute IV.

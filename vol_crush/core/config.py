@@ -73,6 +73,9 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
         "broker.public.api_burst_limit": os.environ.get("API_BURST_LIMIT"),
         "google_sheets.spreadsheet_id": os.environ.get("VOL_CRUSH_GSHEET_ID"),
         "backtesting.polygon.api_key": os.environ.get("VOL_CRUSH_POLYGON_API_KEY"),
+        "regime_bridge.credentials_path": os.environ.get("GOOGLE_API_CREDENTIALS_PATH"),
+        "regime_bridge.sheet_id": os.environ.get("TRADE_LAB_BRIDGE_SHEET_ID"),
+        "regime_bridge.sheet_name": os.environ.get("TRADE_LAB_BRIDGE_SHEET_NAME"),
     }
 
     for dotted_key, value in env_overrides.items():
@@ -135,6 +138,40 @@ def save_strategies(
         yaml.dump(data, f, default_flow_style=False, sort_keys=False, width=120)
 
     return strategies_path
+
+
+def load_strategy_templates(
+    templates_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Load structure-level strategy templates from strategy_templates.yaml."""
+    if templates_path is None:
+        templates_path = _CONFIG_DIR / "strategy_templates.yaml"
+
+    templates_path = Path(templates_path)
+    if not templates_path.exists():
+        return []
+
+    with open(templates_path) as f:
+        data = yaml.safe_load(f) or {}
+
+    return data.get("templates", []) or []
+
+
+def load_underlying_profiles(
+    profiles_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Load underlying universe profiles from underlying_profiles.yaml."""
+    if profiles_path is None:
+        profiles_path = _CONFIG_DIR / "underlying_profiles.yaml"
+
+    profiles_path = Path(profiles_path)
+    if not profiles_path.exists():
+        return []
+
+    with open(profiles_path) as f:
+        data = yaml.safe_load(f) or {}
+
+    return data.get("profiles", []) or []
 
 
 def get_project_root() -> Path:

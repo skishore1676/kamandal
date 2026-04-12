@@ -10,7 +10,12 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from vol_crush.core.config import load_config, load_strategies
+from vol_crush.core.config import (
+    load_config,
+    load_strategies,
+    load_strategy_templates,
+    load_underlying_profiles,
+)
 from vol_crush.core.interfaces import RegimeEvaluator, StorageBackend
 from vol_crush.core.logging import setup_logging
 from vol_crush.core.models import (
@@ -28,9 +33,12 @@ from vol_crush.core.models import (
     Position,
     RegimePolicy,
     Strategy,
+    StrategyTemplate,
     StrategyType,
     TradeIdea,
     TradePlan,
+    UnderlyingProfile,
+    resolve_all_strategies,
 )
 from vol_crush.integrations.fixtures import FixtureMarketDataProvider
 from vol_crush.integrations.storage import build_local_store
@@ -39,6 +47,16 @@ logger = logging.getLogger("vol_crush.optimizer")
 
 
 def load_strategy_objects(config_path: str | Path | None = None) -> list[Strategy]:
+    """Resolve strategy templates + underlying profiles into runtime Strategy objects.
+
+    Falls back to the legacy strategies.yaml if the new config files don't exist or
+    produce no results (backward compatibility for tests and existing deployments).
+    """
+    templates = [StrategyTemplate.from_dict(d) for d in load_strategy_templates() if d]
+    profiles = [UnderlyingProfile.from_dict(d) for d in load_underlying_profiles() if d]
+    resolved = resolve_all_strategies(templates, profiles)
+    if resolved:
+        return resolved
     return [Strategy.from_dict(item) for item in load_strategies() if item]
 
 
@@ -76,8 +94,35 @@ class ConfigRegimeEvaluator(RegimeEvaluator):
         return RegimePolicy(regime=MarketRegime.UNKNOWN)
 
 
-def _strategy_lookup(strategies: list[Strategy]) -> dict[str, Strategy]:
-    return {strategy.structure.value: strategy for strategy in strategies}
+def _strategy_lookup(strategies: list[Strategy]) -> dict[str, list[Strategy]]:
+    """Build a structure → list[Strategy] index so multiple resolved strategies
+    (e.g. put_spread on SPY via index_etf AND put_spread on TLT via bond_etf)
+    coexist without overwriting each other."""
+    result: dict[str, list[Strategy]] = {}
+    for strategy in strategies:
+        result.setdefault(strategy.structure.value, []).append(strategy)
+    return result
+
+
+def _find_strategy_for_idea(
+    idea: TradeIdea,
+    strategy_map: dict[str, list[Strategy]],
+    policy: RegimePolicy,
+) -> Strategy | None:
+    """Find the first matching resolved Strategy for a given idea.
+
+    Matches on structure (idea.strategy_type) AND underlying (idea.underlying must
+    be in the strategy's underlyings list, or the list is empty = any).
+    """
+    candidates = strategy_map.get(idea.strategy_type, [])
+    for strategy in candidates:
+        if (
+            strategy.filters.underlyings
+            and idea.underlying not in strategy.filters.underlyings
+        ):
+            continue
+        return strategy
+    return None
 
 
 def _pick_option(snapshot: MarketSnapshot, option_type: str):
@@ -231,29 +276,77 @@ def validate_trade_ideas(
     strategies: list[Strategy],
     provider: FixtureMarketDataProvider,
     policy: RegimePolicy,
+    regime: MarketRegime | None = None,
 ) -> tuple[list[CandidatePosition], list[str]]:
-    """Validate ideas against approved strategy types and fixture availability."""
+    """Validate ideas against resolved strategies, regime, and fixture data.
+
+    Checks enforced (in order):
+        1. Structure + underlying match via resolved strategy lookup.
+        2. Template-level regime gate: current regime must be in strategy.allowed_regimes.
+        3. Template-level earnings gate: strategy.avoid_earnings + snapshot.event_risk.
+        4. Template-level IV rank bounds: strategy.filters.iv_rank_min/max.
+        5. Regime policy: reject_event_risk, min/max_iv_rank, avoid_structures.
+        6. Fixture availability.
+    """
     notes: list[str] = []
     strategy_map = _strategy_lookup(strategies)
     candidates: list[CandidatePosition] = []
+    current_regime = regime.value if regime is not None else None
 
     for idea in ideas:
-        strategy = strategy_map.get(idea.strategy_type)
+        strategy = _find_strategy_for_idea(idea, strategy_map, policy)
         if strategy is None:
-            notes.append(f"{idea.id}: no approved strategy for {idea.strategy_type}")
-            continue
-        if (
-            strategy.filters.underlyings
-            and idea.underlying not in strategy.filters.underlyings
-        ):
             notes.append(
-                f"{idea.id}: underlying {idea.underlying} not in strategy bounds"
+                f"{idea.id}: no matching template+profile for "
+                f"{idea.strategy_type} on {idea.underlying}"
             )
             continue
+
+        # Template-level regime gate
+        if (
+            strategy.allowed_regimes
+            and current_regime
+            and current_regime not in strategy.allowed_regimes
+        ):
+            notes.append(
+                f"{idea.id}: {strategy.id} not eligible in {current_regime} regime "
+                f"(allowed: {strategy.allowed_regimes})"
+            )
+            continue
+
         snapshot = provider.get_market_snapshot(idea.underlying)
         if snapshot is None:
             notes.append(f"{idea.id}: missing fixture data for {idea.underlying}")
             continue
+
+        # Template-level earnings gate
+        if strategy.avoid_earnings and snapshot.event_risk:
+            notes.append(
+                f"{idea.id}: {strategy.id} avoids earnings/event risk on {idea.underlying}"
+            )
+            continue
+
+        # Template-level IV rank bounds (strategy filters, not just regime policy)
+        if (
+            strategy.filters.iv_rank_min is not None
+            and snapshot.iv_rank < strategy.filters.iv_rank_min
+        ):
+            notes.append(
+                f"{idea.id}: IV rank {snapshot.iv_rank} below strategy minimum "
+                f"{strategy.filters.iv_rank_min} for {strategy.id}"
+            )
+            continue
+        if (
+            strategy.filters.iv_rank_max is not None
+            and snapshot.iv_rank > strategy.filters.iv_rank_max
+        ):
+            notes.append(
+                f"{idea.id}: IV rank {snapshot.iv_rank} above strategy maximum "
+                f"{strategy.filters.iv_rank_max} for {strategy.id}"
+            )
+            continue
+
+        # Regime policy checks (broader market-level gates)
         if policy.reject_event_risk and snapshot.event_risk:
             notes.append(f"{idea.id}: rejected for event risk on {idea.underlying}")
             continue
@@ -531,6 +624,41 @@ def rank_candidate_combos(
     return combos
 
 
+def _resolve_regime(config: dict, snapshots: list) -> tuple[MarketRegime, RegimePolicy]:
+    """Determine the current market regime and its policy.
+
+    Tries the trade_lab_bridge sheet first (live mala_v1 signal), falls back
+    to the config-driven evaluator (fixture IV rank) if the bridge is
+    unconfigured, unreachable, or stale.
+    """
+    from vol_crush.integrations.regime_bridge import (
+        BridgeRegimeEvaluator,
+        fetch_regime_from_sheet,
+    )
+
+    bridge_cfg = config.get("regime_bridge", {})
+    creds = bridge_cfg.get("credentials_path", "")
+    sheet_id = bridge_cfg.get("sheet_id", "")
+    sheet_name = bridge_cfg.get("sheet_name", "trade_lab_bridge")
+
+    snapshot = None
+    if creds and sheet_id:
+        snapshot = fetch_regime_from_sheet(creds, sheet_id, sheet_name)
+
+    if snapshot is not None:
+        evaluator = BridgeRegimeEvaluator(config, snapshot=snapshot)
+        regime = evaluator.determine_regime()
+        policy = evaluator.get_policy(regime)
+        logger.info("Using regime from trade_lab_bridge: %s", snapshot.summary())
+        return regime, policy
+
+    logger.info("Regime bridge unavailable; falling back to config-driven evaluator")
+    evaluator = ConfigRegimeEvaluator(config)
+    regime = evaluator.determine_regime(snapshots)
+    policy = evaluator.get_policy(regime)
+    return regime, policy
+
+
 def build_trade_plan(
     store: StorageBackend,
     config: dict,
@@ -543,10 +671,10 @@ def build_trade_plan(
         if idea.status in (IdeaStatus.NEW.value, IdeaStatus.APPROVED.value)
     ]
     snapshots = provider.list_market_snapshots()
-    evaluator = ConfigRegimeEvaluator(config)
-    regime = evaluator.determine_regime(snapshots)
-    policy = evaluator.get_policy(regime)
-    candidates, notes = validate_trade_ideas(ideas, strategies, provider, policy)
+    regime, policy = _resolve_regime(config, snapshots)
+    candidates, notes = validate_trade_ideas(
+        ideas, strategies, provider, policy, regime=regime
+    )
     base_snapshot = build_portfolio_snapshot(store)
 
     plan_id = f"plan_{uuid.uuid4().hex[:10]}"
