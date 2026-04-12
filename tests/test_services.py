@@ -242,6 +242,49 @@ def test_optimizer_returns_no_trade_without_ideas(tmp_path, monkeypatch):
     assert "No ideas passed validation" in plan.reasoning
 
 
+def test_optimizer_blocks_unapproved_strategies_in_live_mode(tmp_path, monkeypatch):
+    config = _sample_config(tmp_path)
+    config["execution"] = {"mode": "live"}
+    store = LocalStore(
+        sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit"
+    )
+    store.save_trade_ideas(
+        [
+            TradeIdea(
+                id="idea_spy_put",
+                date="2026-04-02",
+                trader_name="Tom",
+                show_name="Bootstrappers",
+                underlying="SPY",
+                strategy_type="short_put",
+                description="Short SPY put",
+                status=IdeaStatus.NEW.value,
+            )
+        ]
+    )
+    provider = FixtureMarketDataProvider(_sample_bundle(tmp_path))
+    monkeypatch.setattr(
+        "vol_crush.optimizer.service.load_strategy_objects",
+        lambda: [
+            Strategy.from_dict(
+                {
+                    "id": "spy_put",
+                    "name": "SPY Short Put",
+                    "structure": "short_put",
+                    "filters": {"underlyings": ["SPY"]},
+                    "backtest_approved": False,
+                    "dry_run_passed": False,
+                }
+            )
+        ],
+    )
+
+    plan = build_trade_plan(store, config, provider)
+
+    assert plan.decision == PlanDecision.NO_TRADE
+    assert any("blocked in live mode" in flag for flag in plan.risk_flags)
+
+
 def test_optimizer_rejects_event_risk_candidate(tmp_path, monkeypatch):
     config = _sample_config(tmp_path)
     config["portfolio"]["regimes"]["event_risk"] = {
@@ -319,6 +362,38 @@ def test_pending_executor_sizes_order(tmp_path):
     assert isinstance(orders[0], PendingOrder)
     assert orders[0].action == TradeAction.OPEN
     assert orders[0].estimated_bpr >= 850.0
+
+
+def test_pending_executor_caps_live_quantity_to_one_by_default(tmp_path):
+    plan = TradePlan(
+        plan_id="plan_1",
+        created_at="2026-04-02T14:00:00+00:00",
+        decision=PlanDecision.EXECUTE,
+        regime=MarketRegime.NORMAL_IV.value,
+        candidate_positions=[
+            CandidatePosition(
+                idea_id="idea_1",
+                strategy_id="spy_put",
+                underlying="SPY",
+                strategy_type="short_put",
+                expiration="2026-05-15",
+                estimated_credit=1.95,
+                estimated_bpr=850.0,
+                estimated_greeks=Greeks(delta=-0.16, gamma=0.025, theta=0.09, vega=0.1),
+            )
+        ],
+    )
+    snapshot = PortfolioSnapshot(
+        timestamp="2026-04-02T14:00:00+00:00",
+        net_liquidation_value=100000.0,
+    )
+    config = _sample_config(tmp_path)
+    config["execution"] = {"mode": "live"}
+
+    orders = create_pending_orders(plan, snapshot, config)
+
+    assert orders[0].quantity == 1
+    assert orders[0].estimated_bpr == 850.0
 
 
 def test_position_manager_emits_close_signal(tmp_path, monkeypatch):

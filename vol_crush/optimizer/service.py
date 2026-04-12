@@ -60,6 +60,36 @@ def load_strategy_objects(config_path: str | Path | None = None) -> list[Strateg
     return [Strategy.from_dict(item) for item in load_strategies() if item]
 
 
+def _execution_mode(config: dict) -> str:
+    return str(config.get("execution", {}).get("mode", "")).lower()
+
+
+def _filter_strategies_for_execution(
+    strategies: list[Strategy], config: dict
+) -> tuple[list[Strategy], list[str]]:
+    """Apply approval gates that depend on execution mode.
+
+    Dry-run and pending modes are allowed to exercise unapproved templates so we can
+    collect evidence. True live placement is stricter: the template must have passed
+    both the backtest gate and the human-reviewed dry-run gate.
+    """
+    if _execution_mode(config) != "live":
+        return strategies, []
+
+    eligible: list[Strategy] = []
+    notes: list[str] = []
+    for strategy in strategies:
+        if strategy.backtest_approved and strategy.dry_run_passed:
+            eligible.append(strategy)
+            continue
+        notes.append(
+            f"{strategy.id}: blocked in live mode because "
+            f"backtest_approved={strategy.backtest_approved} "
+            f"dry_run_passed={strategy.dry_run_passed}"
+        )
+    return eligible, notes
+
+
 class ConfigRegimeEvaluator(RegimeEvaluator):
     """Simple regime selection from current fixture state."""
 
@@ -664,7 +694,9 @@ def build_trade_plan(
     config: dict,
     provider: FixtureMarketDataProvider,
 ) -> TradePlan:
-    strategies = load_strategy_objects()
+    strategies, approval_notes = _filter_strategies_for_execution(
+        load_strategy_objects(), config
+    )
     ideas = [
         idea
         for idea in store.list_trade_ideas()
@@ -675,6 +707,7 @@ def build_trade_plan(
     candidates, notes = validate_trade_ideas(
         ideas, strategies, provider, policy, regime=regime
     )
+    notes = approval_notes + notes
     base_snapshot = build_portfolio_snapshot(store)
 
     plan_id = f"plan_{uuid.uuid4().hex[:10]}"

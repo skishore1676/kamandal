@@ -154,6 +154,7 @@ execution:
   price_step_cents: 1
   fill_timeout_seconds: 120
   max_slippage_pct: 2.0
+  max_contracts_per_order: 1   # first-live-test guardrail; raise deliberately later
   submit_to_broker: true
 
 # Dry run

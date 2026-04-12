@@ -26,11 +26,20 @@ logger = logging.getLogger("vol_crush.executor")
 
 def _sized_quantity(candidate, portfolio: PortfolioSnapshot, config: dict) -> int:
     constraints = config.get("portfolio", {}).get("constraints", {})
+    execution = config.get("execution", {})
     max_single_pct = constraints.get("max_single_underlying_pct", 15.0) / 100.0
     max_bpr_for_single = portfolio.net_liquidation_value * max_single_pct
     if candidate.estimated_bpr <= 0:
-        return 1
-    return max(1, int(max_bpr_for_single // candidate.estimated_bpr))
+        quantity = 1
+    else:
+        quantity = max(1, int(max_bpr_for_single // candidate.estimated_bpr))
+
+    cap = execution.get("max_contracts_per_order")
+    if cap is None and str(execution.get("mode", "")).lower() == "live":
+        cap = 1
+    if cap is not None:
+        quantity = min(quantity, max(1, int(cap)))
+    return quantity
 
 
 def create_pending_orders(
