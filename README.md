@@ -19,12 +19,14 @@ profile**. That Greek-level portfolio optimization is where the edge lives.
 
 ```text
 Module 0: Strategy Miner ──── one-time: transcripts → LLM → review → config
-Module 1: Idea Intake ─────── source adapters → raw docs → LLM extraction → local store
+Module 1: Idea Intake ─────── source adapters → raw docs → LLM summary + extraction → local store
+                              + on-disk transcript archive (14-day retention) and per-video markdown summaries
 Fixtures ──────────────────── local bundle built from sibling repo data + public seeds
 Module 2: Portfolio Optimizer ─ deterministic Greek-aware combo scoring
 Module 3: Pending Executor ── size and emit dry-run/pending orders
 Module 4: Position Manager ── recommend closes/rolls/adjustments
 Backtester ────────────────── replay gate from imported fixture trades
+LLM Compare (CLI) ──────────── replay one archived transcript through N models for side-by-side review
 ```
 
 ## Quick Start
@@ -74,6 +76,10 @@ python -m vol_crush.main --skip-backtest
 
 # Or pull source content first, then run the daily dry-run pipeline
 python -m vol_crush.main --skip-backtest --fetch-sources transcripts
+
+# Compare multiple LLMs against a previously archived YouTube transcript
+python -m vol_crush.llm_compare --video-id Z7Z2fedV1TQ \
+    --models "anthropic/claude-haiku-4.5,deepseek/deepseek-v3.2,openai/gpt-4o"
 ```
 
 If `broker.active` is set to `public`, `execution.mode=dry_run` or `pending`
@@ -90,7 +96,10 @@ kamandal/
 │   ├── underlying_profiles.yaml   # universe groupings + allocation caps
 │   └── strategies.yaml            # legacy (deprecated, kept for compat)
 ├── data/
-│   ├── transcripts/
+│   ├── transcripts/             # human-curated source inputs
+│   │   └── archive/             # auto-archived fetched transcripts (purged after 14 days)
+│   ├── ideas/                   # per-video markdown summaries from the LLM summary pass
+│   ├── llm_comparisons/         # side-by-side N-model reports from `llm_compare`
 │   ├── audio/
 │   ├── fixtures/
 │   ├── audit/
@@ -100,10 +109,11 @@ kamandal/
 │   └── MICRO_PHASE_PLAN.md
 ├── vol_crush/
 │   ├── core/
-│   ├── integrations/
-│   ├── idea_sources/
+│   ├── integrations/              # storage, llm (openai|openrouter), public_broker, fixtures
+│   ├── idea_sources/              # YouTube/RSS/web/transcript adapters + transcript_archive
 │   ├── strategy_miner/
-│   ├── idea_scraper/
+│   ├── idea_scraper/              # summary + extraction prompts, summary_archive writer
+│   ├── llm_compare/               # CLI for side-by-side multi-model comparison
 │   ├── optimizer/
 │   ├── executor/
 │   ├── position_manager/
@@ -137,10 +147,19 @@ kamandal/
 - `event_risk`: reject new exposure
 
 **Idea source config:**
-- `idea_sources.youtube.channel_ids`
+- `idea_sources.youtube.channel_ids` — comma-separated channel IDs to poll
+- `idea_sources.youtube.title_include_keywords` / `title_exclude_keywords` — optional pre-LLM filter; videos whose titles don't match are skipped before transcript fetch
 - `idea_sources.rss.feed_urls`
 - `idea_sources.web.urls`
 - `idea_sources.transcripts.path`
+- `idea_sources.transcripts_archive.path` / `retention_days` — on-disk transcript archive (default `data/transcripts/archive/`, 14 days)
+- `idea_sources.summaries_archive.path` — per-video summary markdown (default `data/ideas/`)
+
+**LLM config (`llm:` section):**
+- `llm.provider` — `openai` or `openrouter`. OpenRouter auto-points the OpenAI SDK at `https://openrouter.ai/api/v1`.
+- `llm.api_key`, `llm.model`, `llm.fallback_model` — when the primary errors (rate limit, 5xx, model-not-found) the client transparently retries with the fallback.
+- Env overrides: `VOL_CRUSH_LLM_PROVIDER`, `VOL_CRUSH_LLM_API_KEY` (or `OPENROUTER_API_KEY`), `VOL_CRUSH_LLM_MODEL`, `VOL_CRUSH_LLM_MODEL_BACKUP`.
+- Whisper audio transcription (live/record modes) still requires `provider=openai`.
 
 ## Documentation
 

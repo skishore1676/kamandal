@@ -36,6 +36,7 @@ python -m vol_crush.executor                                 # emit pending orde
 python -m vol_crush.position_manager                         # close/roll/adjust recommendations (whole-group only)
 python -m vol_crush.backtester                               # replay gate
 python -m vol_crush.portfolio_sync --broker public --show-groups   # pretty-print grouped view
+python -m vol_crush.llm_compare --video-id ID --models "a,b,c"   # side-by-side model comparison report
 
 # Tests / formatting
 pytest
@@ -51,7 +52,13 @@ Modules communicate via a shared `StorageBackend` (SQLite at `data/kamandal.db`)
 
 ```
 strategy_miner   (one-time)   transcripts → LLM distill → strategy candidates (human review)
-idea_sources     (adapters)   youtube/rss/web/transcripts → RawSourceDocument → LLM → TradeIdea
+idea_sources     (adapters)   youtube/rss/web/transcripts → RawSourceDocument → (title filter) → LLM → TradeIdea
+                              YouTube path: youtube-transcript-api → transcript_archive (data/transcripts/archive/, 14-day retention)
+                              + summary_archive (data/ideas/<date>/<video_id>_summary.md)
+idea_scraper     (LLM passes) summary_pass (TRANSCRIPT_SUMMARY_*) + extraction_pass (IDEA_EXTRACTION_*) → enriched TradeIdea
+                              (video_id, host, strikes, extracted_at, confidence)
+llm_compare      (CLI tool)   replays an archived transcript through N models → data/llm_comparisons/<date>/*.{json,md}
+integrations/llm              OpenAI-compatible client; openai|openrouter providers; primary→fallback model failover
 integrations/fixtures         sibling repo data (public_api_trading_v3) + public seeds → fixture_bundle.json + replay_trades.json
 backtester                    replays ReplayTrade set against approved strategies (approval gate)
 portfolio_sync                pulls live Public portfolio → raw BrokerPositionLeg → position_grouping → grouped Positions

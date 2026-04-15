@@ -202,10 +202,10 @@ strategies:
 | Attribute | Detail |
 |---|---|
 | **Purpose** | Capture specific trade ideas and executions from daily tastytrade content |
-| **Input Sources** | YouTube live streams (now); X posts, other feeds (later) |
-| **Capture Modes** | (a) Play video on laptop + hit script for live transcription, (b) Record audio then transcribe |
-| **Processing** | Whisper transcription then LLM extraction of actionable ideas |
-| **Output** | Rows in `daily_ideas` GSheet |
+| **Input Sources** | YouTube channel uploads (primary), local transcript directories, RSS feeds, generic web pages; X posts and live-stream audio (later) |
+| **Capture Modes** | (a) `idea_sources --source youtube` polls Atom feeds + pulls captions via `youtube-transcript-api`; (b) `idea_scraper --mode live`/`record` records audio and runs Whisper (OpenAI provider only) |
+| **Processing** | Two-pass LLM: `TRANSCRIPT_SUMMARY_*` produces a per-video markdown summary (macro/vol/tickers); `IDEA_EXTRACTION_*` produces enriched `TradeIdea` records (`video_id`, `host`, `strikes`, `confidence`, `extracted_at`) |
+| **Output** | `TradeIdea` rows in local SQLite + per-video summary markdown under `data/ideas/<date>/`; `daily_ideas` GSheet remains a deferred sink |
 | **Key Distinction** | This captures **specific trade ideas** (e.g. "sell the May 45 DTE strangle on AAPL"), NOT general strategies. Strategies come from Module 0. |
 
 **Extracted fields per idea:**
