@@ -25,6 +25,9 @@ apscheduler>=3.10.4
 # Notifications
 requests>=2.31.0
 
+# Idea sources (YouTube transcripts, web scraping)
+youtube-transcript-api>=1.2.0
+
 # Audio (Module 1 live capture)
 sounddevice>=0.4.6
 

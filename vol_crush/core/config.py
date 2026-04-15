@@ -54,6 +54,13 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
 
     # Environment variable overrides
     env_overrides = {
+        "llm.provider": os.environ.get("VOL_CRUSH_LLM_PROVIDER"),
+        "llm.model": os.environ.get("VOL_CRUSH_LLM_MODEL"),
+        "llm.fallback_model": os.environ.get("VOL_CRUSH_LLM_MODEL_BACKUP")
+        or os.environ.get("VOL_CRUSH_LLM_FALLBACK_MODEL"),
+        "llm.api_key": os.environ.get("VOL_CRUSH_LLM_API_KEY")
+        or os.environ.get("OPENROUTER_API_KEY"),
+        "llm.base_url": os.environ.get("VOL_CRUSH_LLM_BASE_URL"),
         "openai.api_key": os.environ.get("VOL_CRUSH_OPENAI_API_KEY"),
         "broker.tastytrade.username": os.environ.get("VOL_CRUSH_TT_USERNAME"),
         "broker.tastytrade.password": os.environ.get("VOL_CRUSH_TT_PASSWORD"),

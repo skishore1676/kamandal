@@ -35,7 +35,21 @@ broker:
     sync_portfolio_before_optimizer: true
     sync_portfolio_after_submission: true
 
-# OpenAI (for Whisper transcription + LLM extraction/refinement)
+# LLM (idea extraction, strategy mining, refinement)
+# provider: openai | openrouter
+# For OpenRouter, model must be prefixed:
+#   anthropic/claude-sonnet-4.5, anthropic/claude-haiku-4.5,
+#   openai/gpt-4o, google/gemini-2.5-pro, ...
+# See https://openrouter.ai/models
+llm:
+  provider: openai
+  api_key: ""
+  model: gpt-4o
+  fallback_model: ""   # used if primary model raises (rate limit, 5xx, model-not-found)
+  base_url: ""   # optional; auto-set to OpenRouter when provider=openrouter
+
+# OpenAI (Whisper audio transcription — still required for idea_scraper live/record modes)
+# Also used as fallback for `llm` when llm.api_key is empty and llm.provider=openai.
 openai:
   api_key: ""
   model: gpt-4o
@@ -135,8 +149,17 @@ data_sources:
 
 idea_sources:
   youtube:
-    channel_ids: []
+    channel_ids:
+      - UCLJiSMXJ9K-1AOTqIqdXJgQ   # tastylive (@tastyliveshow — primary RSS feed)
+      - UCYOHtOzMZGwXBLZX1Ltf78g   # projectoption (Chris Butler — defined-risk spreads)
+      - UCQAvjhqp559qSQx2dcg9WVg   # Option Alpha (Kirk Du Plessis — systematic premium selling)
     limit: 5
+    # Optional title prefilter — skip transcript fetch + LLM cost for videos
+    # whose titles don't match. Case-insensitive. Plain strings are matched as
+    # substrings; regex metacharacters are honored ("earnings|IV\\s*rank").
+    # Leave both empty to process every video.
+    title_include_keywords: []   # e.g. ["earnings", "IV rank", "strangle"]
+    title_exclude_keywords: []   # e.g. ["interview", "crypto"]
   rss:
     feed_urls: []
     limit: 5
@@ -144,6 +167,15 @@ idea_sources:
     urls: []
   transcripts:
     path: data/transcripts
+  # Archived copies of fetched transcripts (for audit + human spot-check).
+  # Purged at the start of each fetch run once files age past retention_days.
+  transcripts_archive:
+    path: data/transcripts/archive
+    retention_days: 14
+  # Markdown summaries written by the transcript summary LLM pass, one file
+  # per video: <summaries_archive.path>/<YYYY-MM-DD>/<video_id>_summary.md
+  summaries_archive:
+    path: data/ideas
 
 # Execution
 execution:

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from vol_crush.core.config import load_config, get_project_root
 from vol_crush.core.logging import setup_logging
-from vol_crush.integrations.llm import LLMClient
+from vol_crush.integrations.llm import build_llm_client
 from vol_crush.integrations.storage import build_local_store
 from vol_crush.idea_scraper.scraper import (
     capture_from_audio_file,
@@ -50,14 +50,19 @@ def main() -> None:
     logger = setup_logging(config.get("app", {}).get("log_level", "INFO"))
     logger.info("Vol Crush — Idea Scraper starting (mode=%s)", args.mode)
 
-    openai_key = config.get("openai", {}).get("api_key", "")
-    if not openai_key:
-        logger.error("OpenAI API key not configured.")
+    try:
+        llm = build_llm_client(config)
+    except RuntimeError as exc:
+        logger.error(str(exc))
         sys.exit(1)
 
-    llm = LLMClient(
-        api_key=openai_key, model=config.get("openai", {}).get("model", "gpt-4o")
-    )
+    if args.mode in ("live", "record") and llm.provider != "openai":
+        logger.error(
+            "Audio transcription requires Whisper (provider=openai). "
+            "Current provider=%s. Use --mode transcript or switch llm.provider.",
+            llm.provider,
+        )
+        sys.exit(1)
     store = build_local_store(config)
 
     if args.mode == "live":

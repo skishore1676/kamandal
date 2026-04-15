@@ -14,7 +14,7 @@ import logging
 import tempfile
 import uuid
 import wave
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -23,6 +23,8 @@ from vol_crush.integrations.llm import LLMClient
 from vol_crush.idea_scraper.prompts import (
     IDEA_EXTRACTION_SYSTEM_PROMPT,
     IDEA_EXTRACTION_USER_PROMPT,
+    TRANSCRIPT_SUMMARY_SYSTEM_PROMPT,
+    TRANSCRIPT_SUMMARY_USER_PROMPT,
 )
 
 logger = logging.getLogger("vol_crush.idea_scraper")
@@ -60,6 +62,8 @@ def extract_ideas_from_transcript(
     idea_date: str | None = None,
     source_url: str = "",
     source_title: str = "",
+    author: str = "",
+    video_id: str = "",
 ) -> list[TradeIdea]:
     """Extract actionable trade ideas from a transcript."""
     if idea_date is None:
@@ -72,6 +76,7 @@ def extract_ideas_from_transcript(
         source=source,
         title=source_title or source,
         source_url=source_url or "unknown",
+        author=author or "unknown",
         transcript=transcript,
     )
 
@@ -85,14 +90,15 @@ def extract_ideas_from_transcript(
     raw_ideas = response.get("ideas", [])
     logger.info("Extracted %d raw ideas", len(raw_ideas))
 
+    extracted_at = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
     ideas = []
     for raw in raw_ideas:
         idea = TradeIdea(
             id=f"idea_{uuid.uuid4().hex[:8]}",
             date=idea_date,
-            trader_name=raw.get("trader_name", "Unknown"),
+            trader_name=raw.get("trader_name") or raw.get("host") or "Unknown",
             show_name=raw.get("show_name", source),
-            underlying=raw.get("underlying", ""),
+            underlying=(raw.get("underlying") or "").upper(),
             strategy_type=raw.get("strategy_type", "other"),
             description=raw.get("description", ""),
             expiration=raw.get("expiration", ""),
@@ -101,24 +107,90 @@ def extract_ideas_from_transcript(
             confidence=raw.get("confidence", "medium"),
             source_url=source_url,
             source_timestamp=raw.get("timestamp_approx", ""),
+            video_id=video_id,
+            host=raw.get("host") or author,
+            strikes=_parse_strikes(raw.get("strikes")),
+            extracted_at=extracted_at,
             status=IdeaStatus.NEW.value,
         )
         ideas.append(idea)
         logger.debug(
-            "  -> %s: %s on %s", idea.trader_name, idea.strategy_type, idea.underlying
+            "  -> %s: %s on %s", idea.host or idea.trader_name, idea.strategy_type, idea.underlying
         )
 
     return ideas
 
 
-def _parse_credit(credit_str: str) -> float:
-    """Try to parse a credit string like '$3.50' into a float."""
-    if not credit_str:
+def summarize_transcript(
+    llm: LLMClient,
+    transcript: str,
+    *,
+    source: str = "YouTube",
+    idea_date: str | None = None,
+    source_url: str = "",
+    source_title: str = "",
+    author: str = "",
+) -> dict:
+    """Produce the structured daily summary described in TRANSCRIPT_SUMMARY_*."""
+    if idea_date is None:
+        idea_date = date.today().isoformat()
+
+    logger.info("Summarizing transcript (%d chars)", len(transcript))
+    user_prompt = TRANSCRIPT_SUMMARY_USER_PROMPT.format(
+        date=idea_date,
+        source=source,
+        title=source_title or source,
+        source_url=source_url or "unknown",
+        author=author or "unknown",
+        transcript=transcript,
+    )
+    response = llm.chat_json(
+        system_prompt=TRANSCRIPT_SUMMARY_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        temperature=0.2,
+        max_tokens=2048,
+    )
+    if isinstance(response, list):  # defensive — some models return a bare list
+        response = {"tickers": response}
+    return response
+
+
+def _parse_credit(credit_str) -> float:
+    """Try to parse a credit value (string or number) into a float."""
+    if credit_str in (None, ""):
         return 0.0
+    if isinstance(credit_str, (int, float)):
+        return float(credit_str)
     try:
-        return float(credit_str.replace("$", "").replace(",", "").strip())
+        return float(str(credit_str).replace("$", "").replace(",", "").strip())
     except (ValueError, TypeError):
         return 0.0
+
+
+def _parse_strikes(raw) -> list[float]:
+    """Best-effort coercion of the LLM's ``strikes`` field into list[float]."""
+    if raw in (None, ""):
+        return []
+    if isinstance(raw, (int, float)):
+        return [float(raw)]
+    if isinstance(raw, list):
+        result: list[float] = []
+        for item in raw:
+            try:
+                result.append(float(item))
+            except (ValueError, TypeError):
+                continue
+        return result
+    if isinstance(raw, str):
+        pieces = [p for p in raw.replace(",", " ").replace("/", " ").split() if p]
+        result = []
+        for piece in pieces:
+            try:
+                result.append(float(piece.lstrip("$").rstrip(".")))
+            except ValueError:
+                continue
+        return result
+    return []
 
 
 # ── Audio Recording ──────────────────────────────────────────────────
@@ -205,6 +277,7 @@ def extract_ideas_from_raw_documents(
         text = document.text.strip()
         if not text:
             continue
+        meta = document.metadata or {}
         ideas.extend(
             extract_ideas_from_transcript(
                 llm,
@@ -213,6 +286,8 @@ def extract_ideas_from_raw_documents(
                 idea_date=document.published_at[:10] if document.published_at else None,
                 source_url=document.url,
                 source_title=document.title,
+                author=document.author,
+                video_id=meta.get("video_id", ""),
             )
         )
     return ideas

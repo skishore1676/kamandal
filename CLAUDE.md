@@ -91,6 +91,7 @@ Safety rules enforced in code (not config):
 
 - `broker.active`: `tastytrade` | `public` | `schwab`. Currently only `public` has an implementation; tastytrade/schwab stubs are placeholders.
 - `execution.mode`: `dry_run` (preflight only) | `pending` (write PendingOrder, don't submit) | `live` (submit). All three write audit records; only `live` hits the broker.
+- Live-mode safety gates (enforced in optimizer/executor, not config): strategies must have both `backtest_approved` and `dry_run_passed` before `build_trade_plan` will emit candidates under `mode=live` (unapproved templates still run in `dry_run`/`pending` to collect evidence); `execution.max_contracts_per_order` hard-caps sizing per order (defaults to `1` in live mode if unset).
 - `portfolio.constraints` are hard limits enforced in optimizer code (beta-weighted delta ±5% NLV, daily theta 0.10–0.30% NLV, |gamma/theta| < 1.5, BPR util < 50%, single underlying < 15% BPR, `max_orphan_legs` guard for ungrouped shorts).
 - `portfolio.regimes` (`high_iv` | `normal_iv` | `low_iv` | `event_risk`) drive which structures the optimizer prefers/avoids; `event_risk` rejects new exposure.
 - `data_sources.fixtures.import_gds_history_db` and `import_gds_analysis_json` point into the sibling `public_api_trading_v3` repo — fixtures builder reads those paths directly.
@@ -106,11 +107,34 @@ At runtime: `resolve_all_strategies(templates, profiles)` produces one `Strategy
 
 ## Data Layout
 
-- `data/kamandal.db` — SQLite `StorageBackend` (ideas, plans, orders, positions, snapshots, backtests).
+- `data/kamandal.db` — SQLite `StorageBackend` (ideas, plans, orders, positions, snapshots, backtests). `trade_ideas` and `raw_documents` tables store the entire dataclass as a JSON `payload` column, so adding fields to `TradeIdea` / `RawSourceDocument` requires no SQL migration (only updates to `to_dict` / `from_dict`).
 - `data/fixtures/fixture_bundle.json`, `data/fixtures/replay_trades.json` — regenerated each daily run.
 - `data/audit/` — JSON audit trail for every plan, order, and management action.
-- `data/transcripts/`, `data/audio/` — source inputs for strategy_miner and idea_scraper.
+- `data/transcripts/` — source inputs for `strategy_miner` and `idea_scraper` (human-curated).
+- `data/transcripts/archive/<source>/<date>/<video_id>.{txt,meta.json}` — on-disk copy of every fetched transcript + sidecar metadata; written by `vol_crush/idea_sources/transcript_archive.py`. Purged at the start of each fetch run once files exceed `idea_sources.transcripts_archive.retention_days` (default 14). Also consumed by `vol_crush.llm_compare` to replay a transcript through multiple models.
+- `data/ideas/<date>/<video_id>_summary.md` — LLM-generated markdown summaries (one per transcript) written by `vol_crush/idea_scraper/summary_archive.py`. These are a human-scan layer that runs *before* structured idea extraction so you still get macro/ticker/vol commentary even when no actionable trade is extracted.
+- `data/llm_comparisons/<date>/<video_id>_compare.{json,md}` — side-by-side model comparison reports from `python -m vol_crush.llm_compare`.
+- `data/audio/` — source inputs for live audio capture (Whisper path, OpenAI provider only).
 - `data/cache/public_*.json` — Public broker session/account cache.
+
+## LLM provider + idea extraction
+
+- `LLMClient` in `vol_crush/integrations/llm.py` is OpenAI-compatible but supports OpenRouter (auto base URL swap) and primary → fallback failover. `build_llm_client(config)` reads the `llm:` config section; legacy `openai:` acts as a fallback for back-compat. Env overrides: `VOL_CRUSH_LLM_PROVIDER`, `VOL_CRUSH_LLM_API_KEY` (or `OPENROUTER_API_KEY`), `VOL_CRUSH_LLM_MODEL`, `VOL_CRUSH_LLM_MODEL_BACKUP`.
+- `vol_crush/idea_scraper/prompts.py` holds two prompts: `IDEA_EXTRACTION_*` (structured JSON with ticker/strategy/strikes/confidence/host/timestamp) and `TRANSCRIPT_SUMMARY_*` (macro view, vol view, tickers with bias, notable quotes). Both run against every new YouTube document in `run_source_fetch`.
+- `TradeIdea` carries `video_id`, `host`, `strikes: list[float]`, `extracted_at` alongside legacy `trader_name` / `source_url` / `source_timestamp` / `confidence` fields.
+- YouTube transcripts are fetched via `youtube-transcript-api` (not HTML scraping). Live streams that disable captions (e.g. tastylive's daily live show) will archive only the video description — `metadata.has_transcript` flags this.
+- `idea_sources.youtube.title_include_keywords` / `title_exclude_keywords` are a pre-LLM filter: videos whose titles don't match are skipped before transcript fetch to save cost.
+- `vol_crush/idea_sources/utils.py::fetch_url` wraps urllib with exponential-backoff retry (3 attempts, 1s/2s/4s) on 404/408/425/429/5xx/timeout — needed because YouTube RSS endpoints return 404 intermittently even for valid channels.
+
+### LLM comparison harness
+
+```bash
+python -m vol_crush.llm_compare \
+  --video-id Z7Z2fedV1TQ \
+  --models "anthropic/claude-sonnet-4.5,anthropic/claude-haiku-4.5,deepseek/deepseek-v3.2"
+```
+
+Reads the archived transcript for `--video-id` (from `data/transcripts/archive/`), runs both the summary and extraction prompts against each model, and writes a `.json` + `.md` side-by-side report under `data/llm_comparisons/<date>/`. Uses the same provider + api_key as the live pipeline.
 
 ## Testing Notes
 

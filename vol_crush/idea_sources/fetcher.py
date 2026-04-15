@@ -6,25 +6,36 @@ import argparse
 import logging
 from pathlib import Path
 
-from vol_crush.core.config import get_transcripts_dir, load_config
+from vol_crush.core.config import (
+    get_data_dir,
+    get_transcripts_dir,
+    load_config,
+)
 from vol_crush.core.logging import setup_logging
 from vol_crush.core.models import (
     IdeaStatus,
     RawContentStatus,
     RawSourceDocument,
+    SourceType,
     TradeIdea,
 )
 from vol_crush.idea_scraper.scraper import (
     dedupe_trade_ideas,
     extract_ideas_from_raw_documents,
+    summarize_transcript,
 )
+from vol_crush.idea_scraper.summary_archive import write_summary
 from vol_crush.idea_sources.adapters import (
     GenericWebAdapter,
     RssFeedAdapter,
     TranscriptDirectoryAdapter,
     YouTubeChannelAdapter,
 )
-from vol_crush.integrations.llm import LLMClient
+from vol_crush.idea_sources.transcript_archive import (
+    purge_older_than,
+    write_transcript,
+)
+from vol_crush.integrations.llm import build_llm_client
 from vol_crush.integrations.storage import build_local_store
 
 logger = logging.getLogger("vol_crush.idea_sources.fetcher")
@@ -90,6 +101,28 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _resolve_archive_roots(config: dict) -> tuple[Path, Path, int]:
+    """Return (transcripts_archive_root, summaries_root, retention_days)."""
+    data_dir = get_data_dir()
+    sources_cfg = config.get("idea_sources") or {}
+    archive_cfg = sources_cfg.get("transcripts_archive") or {}
+    summaries_cfg = sources_cfg.get("summaries_archive") or {}
+
+    transcripts_root = Path(
+        archive_cfg.get("path") or (data_dir / "transcripts" / "archive")
+    )
+    summaries_root = Path(summaries_cfg.get("path") or (data_dir / "ideas"))
+    retention_days = int(archive_cfg.get("retention_days") or 14)
+    return transcripts_root, summaries_root, retention_days
+
+
+def _youtube_title_filters(config: dict) -> tuple[list[str], list[str]]:
+    yt_cfg = (config.get("idea_sources") or {}).get("youtube") or {}
+    include = list(yt_cfg.get("title_include_keywords") or [])
+    exclude = list(yt_cfg.get("title_exclude_keywords") or [])
+    return include, exclude
+
+
 def run_source_fetch(
     config: dict,
     source: str,
@@ -100,11 +133,18 @@ def run_source_fetch(
     transcripts_dir: Path | None = None,
     limit: int = 5,
     extract_ideas: bool = False,
+    generate_summaries: bool = True,
 ) -> tuple[list[RawSourceDocument], list[TradeIdea], list[str]]:
     store = build_local_store(config)
     existing = store.list_raw_documents()
     fetched: list[RawSourceDocument] = []
     notes: list[str] = []
+
+    transcripts_archive_root, summaries_root, retention_days = _resolve_archive_roots(
+        config
+    )
+    # Opportunistic cleanup — cheap and keeps the archive bounded.
+    purge_older_than(transcripts_archive_root, retention_days=retention_days)
 
     if source == "youtube":
         adapter = YouTubeChannelAdapter()
@@ -113,8 +153,14 @@ def run_source_fetch(
         ).get("channel_ids", [])
         if not limit:
             limit = config.get("idea_sources", {}).get("youtube", {}).get("limit", 5)
+        include_keywords, exclude_keywords = _youtube_title_filters(config)
         for channel_id in channel_ids:
-            result = adapter.fetch(channel_id=channel_id, limit=limit)
+            result = adapter.fetch(
+                channel_id=channel_id,
+                limit=limit,
+                title_include_keywords=include_keywords,
+                title_exclude_keywords=exclude_keywords,
+            )
             fetched.extend(result.documents)
             notes.extend(result.notes)
     elif source == "rss":
@@ -143,6 +189,18 @@ def run_source_fetch(
         fetched.extend(result.documents)
         notes.extend(result.notes)
 
+    # Mirror freshly fetched transcripts to disk (audit/retention window).
+    for document in fetched:
+        if document.source_type == SourceType.YOUTUBE.value:
+            try:
+                write_transcript(transcripts_archive_root, document)
+            except OSError as exc:
+                logger.warning(
+                    "failed to archive transcript for %s: %s",
+                    document.document_id,
+                    exc,
+                )
+
     kept, duplicates = _dedupe_documents(existing, fetched)
     store.save_raw_documents(fetched)
     ideas: list[TradeIdea] = []
@@ -153,16 +211,17 @@ def run_source_fetch(
     if not extract_ideas or not kept:
         return kept, ideas, notes
 
-    openai_key = config.get("openai", {}).get("api_key", "")
-    if not openai_key:
-        notes.append(
-            "OpenAI API key not configured; raw documents saved but idea extraction skipped."
-        )
+    try:
+        llm = build_llm_client(config)
+    except RuntimeError as exc:
+        notes.append(f"{exc}; raw documents saved but idea extraction skipped.")
         return kept, ideas, notes
 
-    llm = LLMClient(
-        api_key=openai_key, model=config.get("openai", {}).get("model", "gpt-4o")
-    )
+    # Summaries first — one LLM call per new transcript, saved to disk for
+    # human review regardless of whether actionable ideas get extracted.
+    if generate_summaries:
+        _run_summary_pass(llm, kept, summaries_root, notes)
+
     ideas = extract_ideas_from_raw_documents(llm, kept)
     unique_new_ideas = _new_unique_ideas(store.list_trade_ideas(), ideas)
     for document in kept:
@@ -179,6 +238,49 @@ def run_source_fetch(
         len(unique_new_ideas),
     )
     return kept, unique_new_ideas, notes
+
+
+def _run_summary_pass(
+    llm,
+    documents: list[RawSourceDocument],
+    summaries_root: Path,
+    notes: list[str],
+) -> None:
+    for document in documents:
+        text = (document.text or "").strip()
+        if not text:
+            continue
+        try:
+            summary = summarize_transcript(
+                llm,
+                text,
+                source=f"{document.source_type}:{document.source_name}",
+                idea_date=(
+                    document.published_at[:10] if document.published_at else None
+                ),
+                source_url=document.url,
+                source_title=document.title,
+                author=document.author,
+            )
+        except Exception as exc:  # noqa: BLE001 — any model/network failure is non-fatal here
+            notes.append(
+                f"summary failed for {document.document_id}: {type(exc).__name__}: {exc}"
+            )
+            logger.warning(
+                "summary generation failed for %s: %s", document.document_id, exc
+            )
+            continue
+        try:
+            write_summary(
+                summaries_root,
+                document,
+                summary,
+                model=f"{llm.provider}:{llm.model}",
+            )
+        except OSError as exc:
+            notes.append(
+                f"summary write failed for {document.document_id}: {exc}"
+            )
 
 
 def main() -> None:
