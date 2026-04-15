@@ -85,6 +85,12 @@ class BacktestStatus(str, Enum):
 
 
 class ExecutionMode(str, Enum):
+    # SHADOW = write PendingOrder + full preflight, do not submit to broker.
+    # Canonical; matches the bhiksha authorization_mode vocabulary and the
+    # cross-project "shadow → live graduation" language in /Users/sunny/Documents/CLAUDE.md.
+    SHADOW = "shadow"
+    # PENDING is a deprecated alias for SHADOW, kept so existing configs keep
+    # working. Treat it the same as SHADOW in all gate checks.
     PENDING = "pending"
     DRY_RUN = "dry_run"
     LIVE = "live"

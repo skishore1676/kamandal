@@ -61,7 +61,16 @@ def load_strategy_objects(config_path: str | Path | None = None) -> list[Strateg
 
 
 def _execution_mode(config: dict) -> str:
-    return str(config.get("execution", {}).get("mode", "")).lower()
+    """Return the canonical execution mode.
+
+    Accepts the deprecated ``"pending"`` value and normalizes it to
+    ``"shadow"`` — both mean "write PendingOrder with full preflight, do not
+    submit to broker." See :class:`vol_crush.core.models.ExecutionMode`.
+    """
+    raw = str(config.get("execution", {}).get("mode", "")).lower()
+    if raw == "pending":
+        return "shadow"
+    return raw
 
 
 def _filter_strategies_for_execution(
@@ -69,7 +78,7 @@ def _filter_strategies_for_execution(
 ) -> tuple[list[Strategy], list[str]]:
     """Apply approval gates that depend on execution mode.
 
-    Dry-run and pending modes are allowed to exercise unapproved templates so we can
+    Dry-run and shadow modes are allowed to exercise unapproved templates so we can
     collect evidence. True live placement is stricter: the template must have passed
     both the backtest gate and the human-reviewed dry-run gate.
     """

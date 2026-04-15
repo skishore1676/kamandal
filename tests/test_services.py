@@ -242,6 +242,23 @@ def test_optimizer_returns_no_trade_without_ideas(tmp_path, monkeypatch):
     assert "No ideas passed validation" in plan.reasoning
 
 
+def test_execution_mode_pending_normalizes_to_shadow():
+    """The deprecated 'pending' value must be treated identically to 'shadow'.
+
+    The optimizer's live-mode gate only triggers when mode == 'live'. Both
+    'pending' and 'shadow' should fall through to the permissive (non-live)
+    branch with no behavioral difference.
+    """
+    from vol_crush.optimizer.service import _execution_mode
+
+    assert _execution_mode({"execution": {"mode": "pending"}}) == "shadow"
+    assert _execution_mode({"execution": {"mode": "shadow"}}) == "shadow"
+    assert _execution_mode({"execution": {"mode": "PENDING"}}) == "shadow"
+    assert _execution_mode({"execution": {"mode": "live"}}) == "live"
+    assert _execution_mode({"execution": {"mode": "dry_run"}}) == "dry_run"
+    assert _execution_mode({}) == ""
+
+
 def test_optimizer_blocks_unapproved_strategies_in_live_mode(tmp_path, monkeypatch):
     config = _sample_config(tmp_path)
     config["execution"] = {"mode": "live"}

@@ -286,8 +286,8 @@ constraints:
   daily_theta_pct: [0.10, 0.30]           # % of NLV
   max_gamma_ratio: 1.5                     # |gamma/theta| cap
   max_vega_pct: 2.0                        # % of NLV
-  max_bpr_utilization_pct: 50.0
-  hard_bpr_cap_pct: 60.0                   # kill switch level
+  max_bpr_utilization_pct: 60.0            # soft target (optimizer respects)
+  hard_bpr_cap_pct: 70.0                   # kill switch level (10pt above soft target)
   max_single_underlying_pct: 15.0          # % of BPR
   max_sector_concentration_pct: 30.0
   min_positions: 3                          # diversification floor

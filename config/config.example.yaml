@@ -3,7 +3,7 @@
 
 app:
   name: kamandal
-  mode: dry_run  # dry_run | pending | live
+  mode: dry_run  # dry_run | shadow | live   (pending = deprecated alias for shadow)
   log_level: INFO
 
 storage:
@@ -86,8 +86,8 @@ portfolio:
     daily_theta_pct: [0.10, 0.30]           # % of NLV
     max_gamma_ratio: 1.5                     # |gamma/theta| cap
     max_vega_pct: 2.0                        # % of NLV
-    max_bpr_utilization_pct: 50.0
-    hard_bpr_cap_pct: 60.0                   # kill switch level
+    max_bpr_utilization_pct: 60.0            # soft target the optimizer respects
+    hard_bpr_cap_pct: 70.0                   # kill switch level (kept 10pt above soft target)
     max_single_underlying_pct: 15.0          # % of BPR
     max_sector_concentration_pct: 30.0
     min_positions: 3                          # diversification floor
@@ -200,7 +200,12 @@ idea_sources:
 
 # Execution
 execution:
-  mode: pending  # pending | dry_run | live
+  # shadow = full preflight + write PendingOrder, do NOT submit to broker.
+  # dry_run = preflight only, no PendingOrder written.
+  # live    = submit to broker (gated on backtest_approved AND dry_run_passed
+  #           per strategy in vol_crush/optimizer/service.py).
+  # "pending" is accepted as a deprecated alias for "shadow".
+  mode: shadow
   order_type: limit
   time_in_force: DAY
   price_improvement_attempts: 3

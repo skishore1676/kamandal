@@ -28,7 +28,7 @@ def test_load_config_from_example():
     assert "storage" in config
     assert "data_sources" in config
     assert "regimes" in config["portfolio"]
-    assert config["execution"]["mode"] == "pending"
+    assert config["execution"]["mode"] == "shadow"
 
 
 def test_load_config_explicit_path():
