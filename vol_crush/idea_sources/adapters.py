@@ -176,7 +176,17 @@ class RssFeedAdapter:
 
 
 class YouTubeChannelAdapter:
-    """Fetch recent YouTube channel videos and extract transcripts when available."""
+    """Fetch recent YouTube channel videos and extract transcripts when available.
+
+    The transcript source is pluggable via the ``transcript_provider`` argument.
+    Default is a lazily-built chain of ``youtube_captions`` only (free, cached
+    captions), but callers can inject a richer chain (e.g. captions →
+    Groq-Whisper audio fallback) from
+    :func:`vol_crush.transcript_providers.build_chain`.
+    """
+
+    def __init__(self, transcript_provider=None):
+        self.transcript_provider = transcript_provider
 
     def fetch(
         self,
@@ -219,7 +229,9 @@ class YouTubeChannelAdapter:
                 continue
             considered += 1
 
-            transcript = self._fetch_transcript(url) if url else ""
+            transcript = (
+                self._fetch_transcript(url, video_id=video_id) if url else ""
+            )
             summary = self._fetch_description(url) if url else ""
             text = transcript or summary
             if not text:
@@ -263,32 +275,28 @@ class YouTubeChannelAdapter:
         except json.JSONDecodeError:
             return clean_text(match.group(1))
 
-    def _fetch_transcript(self, url: str) -> str:
-        video_id = extract_video_id_from_url(url)
-        if not video_id:
+    def _fetch_transcript(self, url: str, video_id: str = "") -> str:
+        if not url:
             return ""
-        try:
-            from youtube_transcript_api import YouTubeTranscriptApi
-        except ImportError:
-            logger.warning(
-                "youtube-transcript-api not installed; transcript fetch disabled"
+        provider = self.transcript_provider
+        if provider is None:
+            # Lazily build a default chain with only youtube_captions so the
+            # adapter keeps working without an explicit provider argument.
+            from vol_crush.transcript_providers import (
+                YouTubeCaptionProvider,
+                ProviderChain,
             )
-            return ""
-        try:
-            api = YouTubeTranscriptApi()
-            fetched = api.fetch(video_id, languages=["en", "en-US", "en-GB"])
-        except Exception as exc:
+
+            provider = ProviderChain([YouTubeCaptionProvider()])
+            self.transcript_provider = provider
+        result = provider.fetch(url, {"video_id": video_id})
+        if result.error:
             logger.info(
-                "transcript unavailable for %s (%s: %s)",
-                video_id,
-                type(exc).__name__,
-                exc,
+                "transcript chain finished with errors for %s: %s",
+                url,
+                result.metadata.get("failed_providers") or result.error,
             )
-            return ""
-        pieces = [
-            clean_text(getattr(snippet, "text", "") or "") for snippet in fetched
-        ]
-        return "\n".join(piece for piece in pieces if piece)
+        return result.text
 
     @staticmethod
     def _find_text(entry: ET.Element, local_name: str) -> str:

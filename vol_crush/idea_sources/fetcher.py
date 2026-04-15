@@ -37,6 +37,7 @@ from vol_crush.idea_sources.transcript_archive import (
 )
 from vol_crush.integrations.llm import build_llm_client
 from vol_crush.integrations.storage import build_local_store
+from vol_crush.transcript_providers import build_chain as build_transcript_chain
 
 logger = logging.getLogger("vol_crush.idea_sources.fetcher")
 
@@ -147,7 +148,10 @@ def run_source_fetch(
     purge_older_than(transcripts_archive_root, retention_days=retention_days)
 
     if source == "youtube":
-        adapter = YouTubeChannelAdapter()
+        transcript_chain = build_transcript_chain(
+            (config.get("idea_sources") or {}).get("transcripts") or {}
+        )
+        adapter = YouTubeChannelAdapter(transcript_provider=transcript_chain)
         channel_ids = channel_ids or config.get("idea_sources", {}).get(
             "youtube", {}
         ).get("channel_ids", [])

@@ -167,6 +167,27 @@ idea_sources:
     urls: []
   transcripts:
     path: data/transcripts
+    # Ordered chain of transcript providers. First provider with a non-empty
+    # result wins. Enable/disable per entry; options are provider-specific.
+    # Add your own: see vol_crush/transcript_providers/registry.py.
+    providers:
+      - type: youtube_captions        # free, uses youtube-transcript-api
+        enabled: true
+        languages: [en, en-US, en-GB]
+      - type: groq_whisper            # paid audio fallback; OFF by default
+        enabled: false
+        api_key_env: GROQ_API_KEY     # env var to read the key from
+        model: whisper-large-v3-turbo
+        audio_bitrate_kbps: 64
+        upload_limit_mb: 24           # Groq free tier ~25MB
+        chunk_seconds: 600            # 10-min chunks if audio > upload limit
+        max_audio_minutes: 240        # cost guard — skip anything longer
+    # Retry window for retry_transcripts CLI. Most YouTube live streams get
+    # auto-captions 6-24h after broadcast ends, so min_age_hours defaults to
+    # 20 to avoid re-hitting YouTube on fresh streams that won't have captions.
+    retry:
+      min_age_hours: 20
+      max_age_hours: 168              # 7 days
   # Archived copies of fetched transcripts (for audit + human spot-check).
   # Purged at the start of each fetch run once files age past retention_days.
   transcripts_archive:

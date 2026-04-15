@@ -28,6 +28,7 @@ python -m vol_crush.strategy_miner                           # one-time LLM stra
 python -m vol_crush.integrations.fixtures                    # build local market/replay fixtures
 python -m vol_crush.idea_sources --source transcripts
 python -m vol_crush.idea_sources --source youtube --channel-id ID --extract-ideas
+python -m vol_crush.idea_sources.retry_transcripts --dry-run                   # re-fetch transcripts for docs missing them (24h-168h age window)
 python -m vol_crush.idea_sources --source rss --feed-url URL --extract-ideas
 python -m vol_crush.idea_sources --source web --url URL --extract-ideas
 python -m vol_crush.idea_scraper --mode transcript --file data/transcripts/file.txt
@@ -53,8 +54,13 @@ Modules communicate via a shared `StorageBackend` (SQLite at `data/kamandal.db`)
 ```
 strategy_miner   (one-time)   transcripts → LLM distill → strategy candidates (human review)
 idea_sources     (adapters)   youtube/rss/web/transcripts → RawSourceDocument → (title filter) → LLM → TradeIdea
-                              YouTube path: youtube-transcript-api → transcript_archive (data/transcripts/archive/, 14-day retention)
-                              + summary_archive (data/ideas/<date>/<video_id>_summary.md)
+                              YouTube path: ProviderChain (youtube_captions → optional groq_whisper) → transcript_archive
+                              (data/transcripts/archive/, 14-day retention) + summary_archive (data/ideas/<date>/<video_id>_summary.md)
+transcript_providers (plug-in) URL → transcript text. Reusable outside idea_sources; config-driven chain with
+                              per-provider enable/disable. Built-in: youtube_captions, groq_whisper. Add custom via register_provider().
+retry_transcripts (CLI)       re-runs the chain against raw_documents missing a transcript
+                              within [min_age_hours, max_age_hours]. Picks up YouTube auto-captions that
+                              appear 6–24h after a live stream ends without re-hitting paid providers.
 idea_scraper     (LLM passes) summary_pass (TRANSCRIPT_SUMMARY_*) + extraction_pass (IDEA_EXTRACTION_*) → enriched TradeIdea
                               (video_id, host, strikes, extracted_at, confidence)
 llm_compare      (CLI tool)   replays an archived transcript through N models → data/llm_comparisons/<date>/*.{json,md}
@@ -132,6 +138,49 @@ At runtime: `resolve_all_strategies(templates, profiles)` produces one `Strategy
 - YouTube transcripts are fetched via `youtube-transcript-api` (not HTML scraping). Live streams that disable captions (e.g. tastylive's daily live show) will archive only the video description — `metadata.has_transcript` flags this.
 - `idea_sources.youtube.title_include_keywords` / `title_exclude_keywords` are a pre-LLM filter: videos whose titles don't match are skipped before transcript fetch to save cost.
 - `vol_crush/idea_sources/utils.py::fetch_url` wraps urllib with exponential-backoff retry (3 attempts, 1s/2s/4s) on 404/408/425/429/5xx/timeout — needed because YouTube RSS endpoints return 404 intermittently even for valid channels.
+
+### Transcript provider chain
+
+`vol_crush/transcript_providers/` is a standalone module — no dependency on `idea_sources` or trade-idea concepts. It turns a media URL into transcript text via an ordered chain of providers built from config:
+
+```yaml
+idea_sources:
+  transcripts:
+    providers:
+      - type: youtube_captions        # free, uses youtube-transcript-api
+        enabled: true
+        languages: [en, en-US, en-GB]
+      - type: groq_whisper            # paid audio fallback; opt-in
+        enabled: false
+        api_key_env: GROQ_API_KEY
+        model: whisper-large-v3-turbo
+        upload_limit_mb: 24           # Groq 25MB limit → ffmpeg chunks if over
+        chunk_seconds: 600
+        max_audio_minutes: 240        # cost guard
+    retry:
+      min_age_hours: 20
+      max_age_hours: 168
+```
+
+The chain returns the first provider whose `text` is non-empty. Empty-without-error means "pass, try the next provider"; errors are logged and surfaced in `TranscriptFetch.metadata.failed_providers` but never raised. Add a third-party provider:
+
+```python
+from vol_crush.transcript_providers import register_provider
+
+def build_my_podcast(cfg):
+    return MyPodcastProvider(feed_cache=cfg.get("cache_path"))
+
+register_provider("my_podcast", build_my_podcast)
+```
+
+### Retry missing transcripts
+
+```bash
+python -m vol_crush.idea_sources.retry_transcripts --dry-run
+python -m vol_crush.idea_sources.retry_transcripts --min-age-hours 24 --max-age-hours 72
+```
+
+Iterates `raw_documents` with `metadata.has_transcript=False`, runs the provider chain against each within the age window, and on success re-archives the transcript, writes a summary, and re-runs idea extraction. Ideal for a cron entry that picks up YouTube auto-captions the day after a live stream.
 
 ### LLM comparison harness
 

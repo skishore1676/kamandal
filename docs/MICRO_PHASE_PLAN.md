@@ -119,6 +119,15 @@ Execution source of truth for the current dry-run implementation.
 - `[x]` Added coverage for storage, fixtures, optimizer behavior, pending execution, position management, and replay evaluation.
 - `[x]` Updated [README.md](/Users/suman/kg_env/projects/kamandal/README.md) to match the current implementation.
 
+### MP11 Pluggable transcript providers + retry CLI
+
+- `[x]` New `vol_crush/transcript_providers/` module — reusable outside of `idea_sources`. Exposes `TranscriptProvider` Protocol, `TranscriptFetch` dataclass, `ProviderChain`, and a name→factory `PROVIDER_REGISTRY` with a `register_provider()` escape hatch.
+- `[x]` Built-in providers: `YouTubeCaptionProvider` (free, caption-based) and `GroqWhisperProvider` (paid audio fallback — yt-dlp → ffmpeg chunk → Groq `whisper-large-v3-turbo`, off by default, gated on `GROQ_API_KEY`).
+- `[x]` Config-driven chain via `idea_sources.transcripts.providers` list with per-entry `enabled` and provider-specific options.
+- `[x]` `YouTubeChannelAdapter` now accepts a chain; default wiring builds one from config so existing callers keep working.
+- `[x]` New CLI `python -m vol_crush.idea_sources.retry_transcripts` re-runs the chain against raw documents still missing a transcript, scoped by a `[min_age_hours, max_age_hours]` window (defaults 20h / 168h). On success it re-archives the transcript, writes a summary, and re-runs idea extraction.
+- `[x]` Tests: 15 new cases covering each provider, chain ordering + error tolerance, config-driven registry, and retry service filtering / dry-run / end-to-end recovery (mocked). Suite is 121 green.
+
 ### MP10 LLM provider scaffold and YouTube idea pipeline upgrade
 
 - `[x]` Refactored `vol_crush/integrations/llm.py` into a provider-agnostic OpenAI-compatible client (`openai` and `openrouter`) with `build_llm_client(config)` factory.

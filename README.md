@@ -80,6 +80,11 @@ python -m vol_crush.main --skip-backtest --fetch-sources transcripts
 # Compare multiple LLMs against a previously archived YouTube transcript
 python -m vol_crush.llm_compare --video-id Z7Z2fedV1TQ \
     --models "anthropic/claude-haiku-4.5,deepseek/deepseek-v3.2,openai/gpt-4o"
+
+# Retry transcripts that were previously unavailable (e.g. live streams whose
+# auto-captions appear 6-24h later). Picks up captions for free; opt-in Groq
+# Whisper fallback available via config.
+python -m vol_crush.idea_sources.retry_transcripts --dry-run
 ```
 
 If `broker.active` is set to `public`, `execution.mode=dry_run` or `pending`
@@ -113,6 +118,7 @@ kamandal/
 │   ├── idea_sources/              # YouTube/RSS/web/transcript adapters + transcript_archive
 │   ├── strategy_miner/
 │   ├── idea_scraper/              # summary + extraction prompts, summary_archive writer
+│   ├── transcript_providers/      # pluggable media-URL → transcript chain (youtube_captions, groq_whisper, custom)
 │   ├── llm_compare/               # CLI for side-by-side multi-model comparison
 │   ├── optimizer/
 │   ├── executor/
@@ -152,6 +158,8 @@ kamandal/
 - `idea_sources.rss.feed_urls`
 - `idea_sources.web.urls`
 - `idea_sources.transcripts.path`
+- `idea_sources.transcripts.providers` — ordered chain of transcript providers. Built-ins: `youtube_captions` (free, caption-based), `groq_whisper` (paid, opt-in audio fallback). Add custom providers via `vol_crush.transcript_providers.register_provider`.
+- `idea_sources.transcripts.retry.min_age_hours` / `max_age_hours` — window used by `python -m vol_crush.idea_sources.retry_transcripts`. Defaults 20h / 168h so same-day live streams don't trigger retries but next-day auto-captions do.
 - `idea_sources.transcripts_archive.path` / `retention_days` — on-disk transcript archive (default `data/transcripts/archive/`, 14 days)
 - `idea_sources.summaries_archive.path` — per-video summary markdown (default `data/ideas/`)
 
