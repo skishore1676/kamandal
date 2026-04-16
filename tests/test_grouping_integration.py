@@ -313,6 +313,69 @@ def test_optimizer_orphan_leg_constraint_blocks_new_opens() -> None:
     assert orphan_check.actual == 1.0
 
 
+def test_single_underlying_constraint_includes_existing_exposure() -> None:
+    base = PortfolioSnapshot(
+        net_liquidation_value=100_000.0,
+        positions=[
+            Position(
+                position_id="spy_existing",
+                underlying="SPY",
+                strategy_id="",
+                bpr=8000.0,
+                management_status=ManagementStatus.AUTO.value,
+            ),
+            Position(
+                position_id="iwm_existing",
+                underlying="IWM",
+                strategy_id="",
+                bpr=1000.0,
+                management_status=ManagementStatus.AUTO.value,
+            ),
+        ],
+        greeks=Greeks(),
+        bpr_used=9000.0,
+        bpr_used_pct=9.0,
+        theta_as_pct_nlv=0.0,
+        gamma_theta_ratio=0.0,
+        position_count=2,
+    )
+    projected = PortfolioSnapshot.from_dict(base.to_dict())
+    projected.bpr_used = 11000.0
+    projected.bpr_used_pct = 11.0
+    projected.position_count = 3
+    config = {
+        "portfolio": {
+            "constraints": {
+                "beta_weighted_delta_pct": [-5.0, 5.0],
+                "daily_theta_pct": [0.0, 0.5],
+                "max_gamma_ratio": 1.5,
+                "max_bpr_utilization_pct": 50.0,
+                "max_single_underlying_pct": 85.0,
+                "max_positions": 15,
+                "max_orphan_legs": 0,
+            }
+        }
+    }
+    candidate = CandidatePosition(
+        idea_id="idea_1",
+        strategy_id="spy_put",
+        underlying="SPY",
+        strategy_type="short_put",
+        expiration="2026-05-15",
+        estimated_credit=2.0,
+        estimated_bpr=2000.0,
+        estimated_greeks=Greeks(theta=0.08),
+    )
+
+    checks = evaluate_constraints(projected, [candidate], config, base=base)
+
+    spy_check = next(
+        check for check in checks if check.name == "max_single_underlying_pct:SPY"
+    )
+    assert not spy_check.passed
+    assert round(spy_check.actual, 2) == 90.91
+
+
 def test_optimizer_no_trade_when_orphan_leg_present_and_threshold_zero(
     tmp_path, monkeypatch
 ) -> None:

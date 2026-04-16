@@ -35,12 +35,29 @@ from vol_crush.core.models import (
     PendingOrder,
     PortfolioSnapshot,
     Position,
+    TradeAction,
 )
 from vol_crush.integrations.public_broker import PublicBrokerAdapter, parse_occ_symbol
 from vol_crush.integrations.storage import LocalStore, build_local_store
 from vol_crush.position_grouping import group_broker_legs
 
 logger = logging.getLogger("vol_crush.portfolio_sync")
+
+_RECONCILABLE_ORDER_STATUSES = {
+    OrderStatus.PENDING.value,
+    OrderStatus.WORKING.value,
+    OrderStatus.FILLED.value,
+}
+_RECONCILABLE_BROKER_STATUSES = {
+    "ACCEPTED",
+    "FILLED",
+    "OPEN",
+    "PARTIALLY_FILLED",
+    "PENDING",
+    "QUEUED",
+    "SUBMITTED",
+    "WORKING",
+}
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -132,13 +149,19 @@ def _load_known_orders(store: LocalStore) -> list[PendingOrder]:
     """Return PendingOrders that could have opened live legs on the broker.
 
     Kamandal-opened groups are reconciled against these. We skip close/roll/adjust
-    orders (they would remove legs, not add them) and orders without a group anchor.
+    orders (they would remove legs, not add them), dry-run/preflight-only rows, and
+    orders without a group anchor.
     """
     orders: list[PendingOrder] = []
     for order in store.list_pending_orders():
         if not order.broker_order_id:
             continue
-        if order.status == OrderStatus.CANCELLED.value:
+        if order.action != TradeAction.OPEN:
+            continue
+        if order.status not in _RECONCILABLE_ORDER_STATUSES:
+            continue
+        broker_status = (order.broker_status or "").upper()
+        if broker_status not in _RECONCILABLE_BROKER_STATUSES:
             continue
         orders.append(order)
     return orders

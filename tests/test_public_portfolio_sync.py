@@ -182,6 +182,7 @@ def test_sync_public_portfolio_rehydrates_kamandal_opened_group(tmp_path) -> Non
         ],
         broker="public",
         broker_order_id="kamandal-anchor-42",
+        broker_status="SUBMITTED",
         broker_response={"buyingPowerRequirement": "700.00"},
     )
     store.save_pending_orders([known])
@@ -196,3 +197,98 @@ def test_sync_public_portfolio_rehydrates_kamandal_opened_group(tmp_path) -> Non
     assert group.strategy_id == "aapl_debit_spread"
     # Preflight BPR from the known order should override the inference formula.
     assert group.bpr == 700.0
+
+
+def test_sync_public_portfolio_ignores_close_order_group_anchors(tmp_path) -> None:
+    """A close order may reuse the open order anchor, but it must not rehydrate open legs."""
+    config = {
+        "storage": {
+            "local": {
+                "sqlite_path": str(tmp_path / "kamandal.db"),
+                "audit_dir": str(tmp_path / "audit"),
+            }
+        }
+    }
+    store = LocalStore(
+        sqlite_path=tmp_path / "kamandal.db", audit_dir=tmp_path / "audit"
+    )
+
+    close_order = PendingOrder(
+        pending_order_id="pm_close_1",
+        plan_id="position_manager",
+        created_at="2026-04-03T12:00:00Z",
+        action=TradeAction.CLOSE,
+        status="pending",
+        underlying="AAPL",
+        strategy_id="should_not_be_inherited",
+        quantity=1,
+        target_price=7.00,
+        estimated_credit=700.0,
+        estimated_bpr=999.0,
+        greeks_impact=Greeks(),
+        legs=[
+            OptionLeg("AAPL", "2026-05-15", 200.0, "call", "buy"),
+            OptionLeg("AAPL", "2026-05-15", 210.0, "call", "sell"),
+        ],
+        broker="public",
+        broker_order_id="kamandal-anchor-42",
+        broker_status="SUBMITTED",
+        broker_response={"buyingPowerRequirement": "999.00"},
+    )
+    store.save_pending_orders([close_order])
+
+    sync_public_portfolio(config, store=store, adapter=FakePublicSyncAdapter())
+
+    positions = store.list_positions()
+    assert len(positions) == 1
+    group = positions[0]
+    assert group.source == PositionSource.PUBLIC_INFERRED.value
+    assert group.strategy_id == ""
+    assert group.broker_order_id == ""
+    assert group.bpr != 999.0
+
+
+def test_sync_public_portfolio_ignores_preflight_only_open_orders(tmp_path) -> None:
+    """Dry-run/pending preflight anchors should not claim matching live broker legs."""
+    config = {
+        "storage": {
+            "local": {
+                "sqlite_path": str(tmp_path / "kamandal.db"),
+                "audit_dir": str(tmp_path / "audit"),
+            }
+        }
+    }
+    store = LocalStore(
+        sqlite_path=tmp_path / "kamandal.db", audit_dir=tmp_path / "audit"
+    )
+
+    preflight_order = PendingOrder(
+        pending_order_id="dry_run_1",
+        plan_id="plan_1",
+        created_at="2026-04-03T12:00:00Z",
+        action=TradeAction.OPEN,
+        status="dry_run",
+        underlying="AAPL",
+        strategy_id="should_not_be_inherited",
+        quantity=1,
+        target_price=7.00,
+        estimated_credit=-700.0,
+        estimated_bpr=999.0,
+        greeks_impact=Greeks(),
+        legs=[
+            OptionLeg("AAPL", "2026-05-15", 200.0, "call", "buy"),
+            OptionLeg("AAPL", "2026-05-15", 210.0, "call", "sell"),
+        ],
+        broker="public",
+        broker_order_id="dry-run-anchor",
+        broker_status="PREFLIGHT_OK",
+        broker_response={"buyingPowerRequirement": "999.00"},
+    )
+    store.save_pending_orders([preflight_order])
+
+    sync_public_portfolio(config, store=store, adapter=FakePublicSyncAdapter())
+
+    group = store.list_positions()[0]
+    assert group.source == PositionSource.PUBLIC_INFERRED.value
+    assert group.strategy_id == ""
+    assert group.broker_order_id == ""

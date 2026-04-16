@@ -10,14 +10,13 @@ from vol_crush.core.models import (
     PlanDecision,
     PortfolioSnapshot,
     Position,
-    RegimePolicy,
     ReplayTrade,
     Strategy,
     TradeAction,
     TradeIdea,
     TradePlan,
 )
-from vol_crush.executor.service import create_pending_orders
+from vol_crush.executor.service import _latest_trade_plan, create_pending_orders
 from vol_crush.integrations.fixtures import FixtureMarketDataProvider
 from vol_crush.integrations.storage import LocalStore
 from vol_crush.optimizer.service import build_trade_plan
@@ -353,6 +352,8 @@ def test_pending_executor_sizes_order(tmp_path):
     snapshot = PortfolioSnapshot(
         timestamp="2026-04-02T14:00:00+00:00",
         net_liquidation_value=100000.0,
+        bpr_used=10000.0,
+        bpr_used_pct=10.0,
     )
     config = _sample_config(tmp_path)
 
@@ -362,6 +363,43 @@ def test_pending_executor_sizes_order(tmp_path):
     assert isinstance(orders[0], PendingOrder)
     assert orders[0].action == TradeAction.OPEN
     assert orders[0].estimated_bpr >= 850.0
+
+
+def test_pending_executor_rechecks_constraints_after_sizing(tmp_path):
+    plan = TradePlan(
+        plan_id="plan_1",
+        created_at="2026-04-02T14:00:00+00:00",
+        decision=PlanDecision.EXECUTE,
+        regime=MarketRegime.NORMAL_IV.value,
+        candidate_positions=[
+            CandidatePosition(
+                idea_id="idea_1",
+                strategy_id="spy_put",
+                underlying="SPY",
+                strategy_type="short_put",
+                expiration="2026-05-15",
+                estimated_credit=1.0,
+                estimated_bpr=1000.0,
+                estimated_greeks=Greeks(delta=2.0, gamma=0.0, theta=0.0, vega=0.0),
+            )
+        ],
+    )
+    snapshot = PortfolioSnapshot(
+        timestamp="2026-04-02T14:00:00+00:00",
+        net_liquidation_value=100000.0,
+        bpr_used=10000.0,
+        bpr_used_pct=10.0,
+    )
+    config = _sample_config(tmp_path)
+    config["execution"] = {"mode": "pending", "max_contracts_per_order": 10}
+    config["portfolio"]["constraints"]["max_single_underlying_pct"] = 100.0
+
+    orders = create_pending_orders(plan, snapshot, config)
+
+    assert len(orders) == 1
+    assert orders[0].quantity == 2
+    assert orders[0].estimated_bpr == 2000.0
+    assert orders[0].greeks_impact.delta == 4.0
 
 
 def test_pending_executor_caps_live_quantity_to_one_by_default(tmp_path):
@@ -386,6 +424,8 @@ def test_pending_executor_caps_live_quantity_to_one_by_default(tmp_path):
     snapshot = PortfolioSnapshot(
         timestamp="2026-04-02T14:00:00+00:00",
         net_liquidation_value=100000.0,
+        bpr_used=10000.0,
+        bpr_used_pct=10.0,
     )
     config = _sample_config(tmp_path)
     config["execution"] = {"mode": "live"}
@@ -394,6 +434,23 @@ def test_pending_executor_caps_live_quantity_to_one_by_default(tmp_path):
 
     assert orders[0].quantity == 1
     assert orders[0].estimated_bpr == 850.0
+
+
+def test_latest_trade_plan_uses_created_at_not_random_id() -> None:
+    old_plan = TradePlan(
+        plan_id="plan_zzzz",
+        created_at="2026-04-02T14:00:00+00:00",
+        decision=PlanDecision.EXECUTE,
+        regime=MarketRegime.NORMAL_IV.value,
+    )
+    new_plan = TradePlan(
+        plan_id="plan_aaaa",
+        created_at="2026-04-03T14:00:00+00:00",
+        decision=PlanDecision.NO_TRADE,
+        regime=MarketRegime.NORMAL_IV.value,
+    )
+
+    assert _latest_trade_plan([new_plan, old_plan]) is new_plan
 
 
 def test_position_manager_emits_close_signal(tmp_path, monkeypatch):

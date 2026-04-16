@@ -547,6 +547,11 @@ def evaluate_constraints(
         ),
     ]
     by_underlying = {}
+    if base is not None:
+        for position in base.positions:
+            by_underlying[position.underlying] = (
+                by_underlying.get(position.underlying, 0.0) + position.bpr
+            )
     for candidate in candidates:
         by_underlying[candidate.underlying] = (
             by_underlying.get(candidate.underlying, 0.0) + candidate.estimated_bpr
