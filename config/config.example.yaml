@@ -55,17 +55,19 @@ openai:
   model: gpt-4o
   whisper_model: whisper-1
 
-# Google Sheets
+# Google Sheets — human-facing control + reporting plane. Reuses bhiksha's
+# service account (configure via env: GOOGLE_API_CREDENTIALS_PATH +
+# KAMANDAL_SHEET_ID). Bootstrap tabs with `python -m vol_crush.sheets_sync bootstrap`.
 google_sheets:
-  credentials_file: config/google_credentials.json
-  spreadsheet_id: ""
-  sheets:
-    daily_ideas: daily_ideas
-    positions: positions
-    portfolio_snapshot: portfolio_snapshot
-    trade_log: trade_log
-    optimizer_decisions: optimizer_decisions
-    backtest_results: backtest_results
+  credentials_file: ""                  # overridden by GOOGLE_API_CREDENTIALS_PATH
+  spreadsheet_id: ""                    # overridden by KAMANDAL_SHEET_ID
+  enabled: true                         # overridden by ENABLE_SHEETS_SYNC
+  cache_dir: data/sheet_cache           # local JSON mirror used between syncs
+  tabs:
+    strategies: strategies              # READ: strategy approval control plane
+    idea_review: idea_review            # BIDIRECTIONAL: human approves LLM-extracted ideas
+    daily_plan: daily_plan              # WRITE: today's optimizer output
+    positions: positions                # WRITE: grouped Positions with health flags
 
 # Backtesting
 backtesting:

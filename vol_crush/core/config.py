@@ -78,7 +78,16 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
             "API_REQUESTS_PER_SECOND"
         ),
         "broker.public.api_burst_limit": os.environ.get("API_BURST_LIMIT"),
-        "google_sheets.spreadsheet_id": os.environ.get("VOL_CRUSH_GSHEET_ID"),
+        "google_sheets.spreadsheet_id": os.environ.get("KAMANDAL_SHEET_ID")
+        or os.environ.get("VOL_CRUSH_GSHEET_ID"),
+        "google_sheets.credentials_file": os.environ.get(
+            "GOOGLE_API_CREDENTIALS_PATH"
+        ),
+        "google_sheets.enabled": (
+            os.environ.get("ENABLE_SHEETS_SYNC", "").lower() in {"1", "true", "yes"}
+            if os.environ.get("ENABLE_SHEETS_SYNC") is not None
+            else None
+        ),
         "backtesting.polygon.api_key": os.environ.get("VOL_CRUSH_POLYGON_API_KEY"),
         "regime_bridge.credentials_path": os.environ.get("GOOGLE_API_CREDENTIALS_PATH"),
         "regime_bridge.sheet_id": os.environ.get("TRADE_LAB_BRIDGE_SHEET_ID"),
