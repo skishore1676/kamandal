@@ -119,6 +119,28 @@ Execution source of truth for the current dry-run implementation.
 - `[x]` Added coverage for storage, fixtures, optimizer behavior, pending execution, position management, and replay evaluation.
 - `[x]` Updated [README.md](/Users/suman/kg_env/projects/kamandal/README.md) to match the current implementation.
 
+### MP11 Pluggable transcript providers + retry CLI
+
+- `[x]` New `vol_crush/transcript_providers/` module — reusable outside of `idea_sources`. Exposes `TranscriptProvider` Protocol, `TranscriptFetch` dataclass, `ProviderChain`, and a name→factory `PROVIDER_REGISTRY` with a `register_provider()` escape hatch.
+- `[x]` Built-in providers: `YouTubeCaptionProvider` (free, caption-based) and `GroqWhisperProvider` (paid audio fallback — yt-dlp → ffmpeg chunk → Groq `whisper-large-v3-turbo`, off by default, gated on `GROQ_API_KEY`).
+- `[x]` Config-driven chain via `idea_sources.transcripts.providers` list with per-entry `enabled` and provider-specific options.
+- `[x]` `YouTubeChannelAdapter` now accepts a chain; default wiring builds one from config so existing callers keep working.
+- `[x]` New CLI `python -m vol_crush.idea_sources.retry_transcripts` re-runs the chain against raw documents still missing a transcript, scoped by a `[min_age_hours, max_age_hours]` window (defaults 20h / 168h). On success it re-archives the transcript, writes a summary, and re-runs idea extraction.
+- `[x]` Tests: 15 new cases covering each provider, chain ordering + error tolerance, config-driven registry, and retry service filtering / dry-run / end-to-end recovery (mocked). Suite is 121 green.
+
+### MP10 LLM provider scaffold and YouTube idea pipeline upgrade
+
+- `[x]` Refactored `vol_crush/integrations/llm.py` into a provider-agnostic OpenAI-compatible client (`openai` and `openrouter`) with `build_llm_client(config)` factory.
+- `[x]` Added primary → fallback model failover so transient 429/5xx/model-not-found errors transparently retry with `llm.fallback_model` (env: `VOL_CRUSH_LLM_MODEL_BACKUP`).
+- `[x]` New `llm:` config section + env overrides (`VOL_CRUSH_LLM_*`); legacy `openai:` section kept as a back-compat fallback. Audio/Whisper still requires `provider=openai`.
+- `[x]` Swapped YouTube transcript scraping for `youtube-transcript-api`; added macOS certifi-backed SSL context, browser User-Agent, and exponential-backoff retry for transient 4xx/5xx in `vol_crush/idea_sources/utils.py`.
+- `[x]` New `transcript_archive` writes every fetched transcript + sidecar JSON to `data/transcripts/archive/<source>/<date>/`; configurable retention purge runs at the start of each fetch (default 14 days).
+- `[x]` Added `TRANSCRIPT_SUMMARY_*` prompt + `summarize_transcript()` pass that produces per-video markdown under `data/ideas/<date>/<video_id>_summary.md` (macro view, vol view, tickers with bias, notable quotes).
+- `[x]` Enriched `TradeIdea` schema with `video_id`, `host`, `strikes: list[float]`, `extracted_at`. Storage is JSON-payload based, so no SQL migration was required.
+- `[x]` Optional title pre-filter (`idea_sources.youtube.title_include_keywords` / `title_exclude_keywords`) skips transcript fetch + LLM cost for non-matching videos.
+- `[x]` New `vol_crush.llm_compare` CLI replays an archived transcript through N models and writes side-by-side `.json` + `.md` reports under `data/llm_comparisons/<date>/`.
+- `[x]` Test suite grew to 106 passing tests; new coverage for title filter, archive purge, summary render, HTTP retry semantics, and the comparison harness end-to-end (mocked LLM).
+
 ## Verification
 
 Executed successfully during implementation:
@@ -128,9 +150,11 @@ Executed successfully during implementation:
 - `.venv/bin/python -m vol_crush.integrations.fixtures`
 - `.venv/bin/python -m vol_crush.main --skip-backtest --fetch-sources transcripts`
 
-Most recent result:
+Most recent result (2026-04-15):
 
-- Tests: `43 passed`
+- Tests: `106 passed`
+- YouTube fetch: archived transcripts to `data/transcripts/archive/youtube/<date>/` and produced per-video summaries under `data/ideas/<date>/`
+- LLM comparison harness: ran `gemma-4-31b-it:free`, `deepseek/deepseek-v3.2`, and `anthropic/claude-haiku-4.5` against the same transcript and wrote a side-by-side `.md` + `.json` report
 - Source fetch: completed for transcript-source mode and persisted raw documents
 - Fixture build: completed, wrote fixture and replay artifacts under `data/fixtures/`
 - Daily pipeline: completed in dry-run mode and emitted `no_trade` with the current empty strategy set
@@ -141,4 +165,4 @@ Most recent result:
 - Google Sheets is not yet wired; local SQLite plus JSON audit files are the primary store.
 - Greek and BPR estimation are heuristic when no broker-grade chain data is available.
 - Replay backtesting is a pragmatic gate, not a full institutional historical options simulator.
-- YouTube transcript extraction is best-effort and depends on caption availability in the public watch page.
+- YouTube transcript extraction uses [youtube-transcript-api](https://github.com/jdepoix/youtube-transcript-api) and still depends on caption availability. Live streams that disable captions (e.g. tastylive's daily live show) currently archive only the video description; an audio-Whisper fallback is not yet wired.

@@ -3,7 +3,7 @@
 
 app:
   name: kamandal
-  mode: dry_run  # dry_run | pending | live
+  mode: dry_run  # dry_run | shadow | live   (pending = deprecated alias for shadow)
   log_level: INFO
 
 storage:
@@ -35,23 +35,39 @@ broker:
     sync_portfolio_before_optimizer: true
     sync_portfolio_after_submission: true
 
-# OpenAI (for Whisper transcription + LLM extraction/refinement)
+# LLM (idea extraction, strategy mining, refinement)
+# provider: openai | openrouter
+# For OpenRouter, model must be prefixed:
+#   anthropic/claude-sonnet-4.5, anthropic/claude-haiku-4.5,
+#   openai/gpt-4o, google/gemini-2.5-pro, ...
+# See https://openrouter.ai/models
+llm:
+  provider: openai
+  api_key: ""
+  model: gpt-4o
+  fallback_model: ""   # used if primary model raises (rate limit, 5xx, model-not-found)
+  base_url: ""   # optional; auto-set to OpenRouter when provider=openrouter
+
+# OpenAI (Whisper audio transcription — still required for idea_scraper live/record modes)
+# Also used as fallback for `llm` when llm.api_key is empty and llm.provider=openai.
 openai:
   api_key: ""
   model: gpt-4o
   whisper_model: whisper-1
 
-# Google Sheets
+# Google Sheets — human-facing control + reporting plane. Reuses bhiksha's
+# service account (configure via env: GOOGLE_API_CREDENTIALS_PATH +
+# KAMANDAL_SHEET_ID). Bootstrap tabs with `python -m vol_crush.sheets_sync bootstrap`.
 google_sheets:
-  credentials_file: config/google_credentials.json
-  spreadsheet_id: ""
-  sheets:
-    daily_ideas: daily_ideas
-    positions: positions
-    portfolio_snapshot: portfolio_snapshot
-    trade_log: trade_log
-    optimizer_decisions: optimizer_decisions
-    backtest_results: backtest_results
+  credentials_file: ""                  # overridden by GOOGLE_API_CREDENTIALS_PATH
+  spreadsheet_id: ""                    # overridden by KAMANDAL_SHEET_ID
+  enabled: true                         # overridden by ENABLE_SHEETS_SYNC
+  cache_dir: data/sheet_cache           # local JSON mirror used between syncs
+  tabs:
+    strategies: strategies              # READ: strategy approval control plane
+    idea_review: idea_review            # BIDIRECTIONAL: human approves LLM-extracted ideas
+    daily_plan: daily_plan              # WRITE: today's optimizer output
+    positions: positions                # WRITE: grouped Positions with health flags
 
 # Backtesting
 backtesting:
@@ -72,8 +88,8 @@ portfolio:
     daily_theta_pct: [0.10, 0.30]           # % of NLV
     max_gamma_ratio: 1.5                     # |gamma/theta| cap
     max_vega_pct: 2.0                        # % of NLV
-    max_bpr_utilization_pct: 50.0
-    hard_bpr_cap_pct: 60.0                   # kill switch level
+    max_bpr_utilization_pct: 60.0            # soft target the optimizer respects
+    hard_bpr_cap_pct: 70.0                   # kill switch level (kept 10pt above soft target)
     max_single_underlying_pct: 15.0          # % of BPR
     max_sector_concentration_pct: 30.0
     min_positions: 3                          # diversification floor
@@ -135,8 +151,17 @@ data_sources:
 
 idea_sources:
   youtube:
-    channel_ids: []
+    channel_ids:
+      - UCLJiSMXJ9K-1AOTqIqdXJgQ   # tastylive (@tastyliveshow — primary RSS feed)
+      - UCYOHtOzMZGwXBLZX1Ltf78g   # projectoption (Chris Butler — defined-risk spreads)
+      - UCQAvjhqp559qSQx2dcg9WVg   # Option Alpha (Kirk Du Plessis — systematic premium selling)
     limit: 5
+    # Optional title prefilter — skip transcript fetch + LLM cost for videos
+    # whose titles don't match. Case-insensitive. Plain strings are matched as
+    # substrings; regex metacharacters are honored ("earnings|IV\\s*rank").
+    # Leave both empty to process every video.
+    title_include_keywords: []   # e.g. ["earnings", "IV rank", "strangle"]
+    title_exclude_keywords: []   # e.g. ["interview", "crypto"]
   rss:
     feed_urls: []
     limit: 5
@@ -144,10 +169,45 @@ idea_sources:
     urls: []
   transcripts:
     path: data/transcripts
+    # Ordered chain of transcript providers. First provider with a non-empty
+    # result wins. Enable/disable per entry; options are provider-specific.
+    # Add your own: see vol_crush/transcript_providers/registry.py.
+    providers:
+      - type: youtube_captions        # free, uses youtube-transcript-api
+        enabled: true
+        languages: [en, en-US, en-GB]
+      - type: groq_whisper            # paid audio fallback; OFF by default
+        enabled: false
+        api_key_env: GROQ_API_KEY     # env var to read the key from
+        model: whisper-large-v3-turbo
+        audio_bitrate_kbps: 64
+        upload_limit_mb: 24           # Groq free tier ~25MB
+        chunk_seconds: 600            # 10-min chunks if audio > upload limit
+        max_audio_minutes: 240        # cost guard — skip anything longer
+    # Retry window for retry_transcripts CLI. Most YouTube live streams get
+    # auto-captions 6-24h after broadcast ends, so min_age_hours defaults to
+    # 20 to avoid re-hitting YouTube on fresh streams that won't have captions.
+    retry:
+      min_age_hours: 20
+      max_age_hours: 168              # 7 days
+  # Archived copies of fetched transcripts (for audit + human spot-check).
+  # Purged at the start of each fetch run once files age past retention_days.
+  transcripts_archive:
+    path: data/transcripts/archive
+    retention_days: 14
+  # Markdown summaries written by the transcript summary LLM pass, one file
+  # per video: <summaries_archive.path>/<YYYY-MM-DD>/<video_id>_summary.md
+  summaries_archive:
+    path: data/ideas
 
 # Execution
 execution:
-  mode: pending  # pending | dry_run | live
+  # shadow = full preflight + write PendingOrder, do NOT submit to broker.
+  # dry_run = preflight only, no PendingOrder written.
+  # live    = submit to broker (gated on backtest_approved AND dry_run_passed
+  #           per strategy in vol_crush/optimizer/service.py).
+  # "pending" is accepted as a deprecated alias for "shadow".
+  mode: shadow
   order_type: limit
   time_in_force: DAY
   price_improvement_attempts: 3

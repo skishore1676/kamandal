@@ -25,7 +25,7 @@ from vol_crush.core.config import (
     save_strategies,
 )
 from vol_crush.core.logging import setup_logging
-from vol_crush.integrations.llm import LLMClient
+from vol_crush.integrations.llm import build_llm_client
 from vol_crush.strategy_miner.distiller import distill_strategies
 from vol_crush.strategy_miner.extractor import (
     extract_all,
@@ -80,17 +80,11 @@ def main() -> None:
     logger = setup_logging(config.get("app", {}).get("log_level", "INFO"))
     logger.info("Vol Crush — Strategy Miner starting")
 
-    # Validate OpenAI key
-    openai_key = config.get("openai", {}).get("api_key", "")
-    if not openai_key:
-        logger.error(
-            "OpenAI API key not configured. Set it in config/config.yaml "
-            "or via VOL_CRUSH_OPENAI_API_KEY environment variable."
-        )
+    try:
+        llm = build_llm_client(config)
+    except RuntimeError as exc:
+        logger.error(str(exc))
         sys.exit(1)
-
-    model = config.get("openai", {}).get("model", "gpt-4o")
-    llm = LLMClient(api_key=openai_key, model=model)
 
     project_root = get_project_root()
     transcripts_dir = args.transcripts_dir or get_transcripts_dir()

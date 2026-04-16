@@ -85,6 +85,12 @@ class BacktestStatus(str, Enum):
 
 
 class ExecutionMode(str, Enum):
+    # SHADOW = write PendingOrder + full preflight, do not submit to broker.
+    # Canonical; matches the bhiksha authorization_mode vocabulary and the
+    # cross-project "shadow → live graduation" language in /Users/sunny/Documents/CLAUDE.md.
+    SHADOW = "shadow"
+    # PENDING is a deprecated alias for SHADOW, kept so existing configs keep
+    # working. Treat it the same as SHADOW in all gate checks.
     PENDING = "pending"
     DRY_RUN = "dry_run"
     LIVE = "live"
@@ -686,6 +692,12 @@ class TradeIdea:
     confidence: str = "medium"  # high / medium / low
     source_url: str = ""
     source_timestamp: str = ""
+    # Richer YouTube-era fields. trader_name stays for back-compat; host is the
+    # on-camera person when distinguishable (e.g. "Tom Sosnoff").
+    video_id: str = ""
+    host: str = ""
+    strikes: list[float] = field(default_factory=list)
+    extracted_at: str = ""  # ISO-8601 UTC timestamp when the LLM produced the idea
     status: str = (
         IdeaStatus.NEW.value
     )  # new / evaluated / approved / rejected / executed
@@ -706,6 +718,10 @@ class TradeIdea:
             "confidence": self.confidence,
             "source_url": self.source_url,
             "source_timestamp": self.source_timestamp,
+            "video_id": self.video_id,
+            "host": self.host,
+            "strikes": list(self.strikes),
+            "extracted_at": self.extracted_at,
             "status": self.status,
         }
         return d

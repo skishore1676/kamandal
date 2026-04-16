@@ -61,7 +61,44 @@ def load_strategy_objects(config_path: str | Path | None = None) -> list[Strateg
 
 
 def _execution_mode(config: dict) -> str:
-    return str(config.get("execution", {}).get("mode", "")).lower()
+    """Return the canonical execution mode.
+
+    Accepts the deprecated ``"pending"`` value and normalizes it to
+    ``"shadow"`` — both mean "write PendingOrder with full preflight, do not
+    submit to broker." See :class:`vol_crush.core.models.ExecutionMode`.
+    """
+    raw = str(config.get("execution", {}).get("mode", "")).lower()
+    if raw == "pending":
+        return "shadow"
+    return raw
+
+
+def _split_strategy_id(strategy_id: str) -> tuple[str, str]:
+    """Strategy.id is built as ``f'{template_id}:{profile_id}'``."""
+    if ":" in strategy_id:
+        template_id, _, profile_id = strategy_id.partition(":")
+        return template_id, profile_id
+    return strategy_id, ""
+
+
+def _load_approval_overlay(config: dict) -> dict[tuple[str, str], Any]:
+    """Load sheet-synced approval rows keyed by (template_id, profile_id).
+
+    Returns an empty dict when sheet sync is disabled or the cache is missing.
+    Importing lazily so optimizer tests do not need gspread installed.
+    """
+    if not (config.get("google_sheets") or {}).get("enabled", True):
+        return {}
+    try:
+        from vol_crush.sheets.sync import read_approvals_cache
+    except ImportError:
+        return {}
+    overlay: dict[tuple[str, str], Any] = {}
+    for row in read_approvals_cache(config):
+        if not row.template_id or not row.profile_id:
+            continue
+        overlay[(row.template_id, row.profile_id)] = row
+    return overlay
 
 
 def _filter_strategies_for_execution(
@@ -69,25 +106,113 @@ def _filter_strategies_for_execution(
 ) -> tuple[list[Strategy], list[str]]:
     """Apply approval gates that depend on execution mode.
 
-    Dry-run and pending modes are allowed to exercise unapproved templates so we can
-    collect evidence. True live placement is stricter: the template must have passed
-    both the backtest gate and the human-reviewed dry-run gate.
+    Shadow and dry-run modes are permissive: any resolved strategy is allowed
+    to run so the pipeline can collect evidence without risking real orders.
+
+    Live mode is strict. A strategy passes when BOTH hold:
+      1. Template-level flags ``backtest_approved`` and ``dry_run_passed`` are
+         true. These may come from the YAML template or be overridden by a
+         matching sheet approval row (see
+         :mod:`vol_crush.sheets.sync`). Sheet values win when present.
+      2. The sheet approval row, if any, has ``enabled=True`` AND
+         ``authorization_mode=live``. Rows set to ``shadow`` downgrade the
+         strategy — it stays in the plan but is tagged shadow-only, never
+         escalated past the account-level mode.
+
+    If no matching sheet row exists the row is effectively "not approved for
+    live" and the strategy is blocked in live mode.
     """
-    if _execution_mode(config) != "live":
+    mode = _execution_mode(config)
+    overlay = _load_approval_overlay(config)
+
+    # Merge sheet overrides onto every strategy (in place copy). This lets the
+    # rest of the optimizer see a single source of truth.
+    for strategy in strategies:
+        template_id, profile_id = _split_strategy_id(strategy.id)
+        row = overlay.get((template_id, profile_id))
+        if row is None:
+            continue
+        if row.backtest_approved:
+            strategy.backtest_approved = True
+        if row.dry_run_passed:
+            strategy.dry_run_passed = True
+        if row.max_bpr_pct_override is not None:
+            strategy.allocation.max_bpr_pct = row.max_bpr_pct_override
+        if row.max_positions_override is not None:
+            strategy.allocation.max_positions = row.max_positions_override
+
+    if mode != "live":
         return strategies, []
 
     eligible: list[Strategy] = []
     notes: list[str] = []
     for strategy in strategies:
-        if strategy.backtest_approved and strategy.dry_run_passed:
-            eligible.append(strategy)
+        template_id, profile_id = _split_strategy_id(strategy.id)
+        row = overlay.get((template_id, profile_id))
+        if row is None:
+            notes.append(
+                f"{strategy.id}: blocked in live mode — no sheet approval row "
+                f"found in the strategies tab"
+            )
+            continue
+        if not row.enabled:
+            notes.append(f"{strategy.id}: blocked — sheet row has enabled=FALSE")
+            continue
+        if not strategy.backtest_approved or not strategy.dry_run_passed:
+            notes.append(
+                f"{strategy.id}: blocked in live mode because "
+                f"backtest_approved={strategy.backtest_approved} "
+                f"dry_run_passed={strategy.dry_run_passed}"
+            )
+            continue
+        if row.authorization_mode.value != "live":
+            notes.append(
+                f"{strategy.id}: blocked — sheet authorization_mode=shadow "
+                f"downgrades this row from account-level live"
+            )
+            continue
+        eligible.append(strategy)
+    return eligible, notes
+
+
+def _load_idea_approval_overlay(config: dict) -> dict[str, Any]:
+    """Load sheet-synced idea_review rows keyed by idea_id."""
+    if not (config.get("google_sheets") or {}).get("enabled", True):
+        return {}
+    try:
+        from vol_crush.sheets.sync import read_idea_approvals_cache
+    except ImportError:
+        return {}
+    return {row.idea_id: row for row in read_idea_approvals_cache(config) if row.idea_id}
+
+
+def _filter_ideas_for_execution(ideas, config: dict):
+    """Gate LLM-extracted ideas through the idea_review sheet when live.
+
+    Shadow and dry-run modes are permissive: all ideas pass so the pipeline
+    can build evidence. In live mode an idea must carry ``approval="approve"``
+    in the idea_review sheet; pending / reject / hold rows are dropped, and
+    ideas with no sheet entry are treated as unreviewed and blocked.
+    """
+    if _execution_mode(config) != "live":
+        return list(ideas), []
+
+    overlay = _load_idea_approval_overlay(config)
+    kept: list = []
+    notes: list[str] = []
+    for idea in ideas:
+        row = overlay.get(idea.id)
+        if row is None:
+            notes.append(f"idea {idea.id}: blocked — no idea_review row")
+            continue
+        if row.approval.value == "approve":
+            kept.append(idea)
             continue
         notes.append(
-            f"{strategy.id}: blocked in live mode because "
-            f"backtest_approved={strategy.backtest_approved} "
-            f"dry_run_passed={strategy.dry_run_passed}"
+            f"idea {idea.id}: blocked by idea_review "
+            f"(approval={row.approval.value or 'pending'})"
         )
-    return eligible, notes
+    return kept, notes
 
 
 class ConfigRegimeEvaluator(RegimeEvaluator):
@@ -702,11 +827,13 @@ def build_trade_plan(
     strategies, approval_notes = _filter_strategies_for_execution(
         load_strategy_objects(), config
     )
-    ideas = [
+    raw_ideas = [
         idea
         for idea in store.list_trade_ideas()
         if idea.status in (IdeaStatus.NEW.value, IdeaStatus.APPROVED.value)
     ]
+    ideas, idea_approval_notes = _filter_ideas_for_execution(raw_ideas, config)
+    approval_notes = approval_notes + idea_approval_notes
     snapshots = provider.list_market_snapshots()
     regime, policy = _resolve_regime(config, snapshots)
     candidates, notes = validate_trade_ideas(

@@ -262,7 +262,10 @@ class PublicBrokerAdapter:
         self.client = client or PublicApiClient(self.settings)
 
     def execution_mode(self) -> str:
-        return str(self.execution_cfg.get("mode", "pending"))
+        # Normalize the deprecated "pending" alias to the canonical "shadow"
+        # so downstream callers (audit logs, UI) see a single consistent name.
+        raw = str(self.execution_cfg.get("mode", "shadow"))
+        return "shadow" if raw == "pending" else raw
 
     def get_primary_account_id(self) -> str:
         if self.settings.account_id:

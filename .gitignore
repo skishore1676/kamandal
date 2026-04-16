@@ -13,6 +13,9 @@ data/audit/
 data/fixtures/
 data/*.db
 data/transcripts/
+data/ideas/
+data/llm_comparisons/
+data/sheet_cache/
 data/extracted_candidates.json
 data/distilled_strategies.json
 data/portfolio_guidelines.json

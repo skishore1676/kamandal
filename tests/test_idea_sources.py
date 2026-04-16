@@ -1,10 +1,8 @@
 """Tests for source adapters and source-driven idea extraction."""
 
-import json
-from pathlib import Path
 from unittest.mock import MagicMock
 
-from vol_crush.core.models import RawSourceDocument, SourceType, TradeIdea
+from vol_crush.core.models import RawSourceDocument, SourceType
 from vol_crush.idea_scraper.scraper import (
     dedupe_trade_ideas,
     extract_ideas_from_raw_documents,
@@ -28,41 +26,107 @@ def test_transcript_directory_adapter_reads_documents(tmp_path):
     assert "SPY put spread" in result.documents[0].text
 
 
-def test_youtube_adapter_extracts_transcript(monkeypatch):
-    feed_xml = """
-    <feed xmlns="http://www.w3.org/2005/Atom" xmlns:yt="http://www.youtube.com/xml/schemas/2015">
-      <entry>
-        <yt:videoId>abc123</yt:videoId>
-        <title>SPY short put idea</title>
-        <published>2026-04-02T14:00:00+00:00</published>
-        <author><name>Trader A</name></author>
-      </entry>
-    </feed>
-    """
-    watch_html = """
-    <html><head><title>SPY short put idea</title></head>
-    <body>"shortDescription":"Selling the SPY put here"
-    "baseUrl":"https:\\/\\/www.youtube.com\\/api\\/timedtext?v=abc123\\u0026lang=en"
-    </body></html>
-    """
-    transcript_xml = (
-        "<transcript><text>Sell the SPY put spread today</text></transcript>"
+def _build_feed_xml(entries):
+    """Tiny helper — assemble a multi-entry Atom feed for tests."""
+    body = "".join(
+        f"""
+        <entry>
+          <yt:videoId>{e['video_id']}</yt:videoId>
+          <title>{e['title']}</title>
+          <published>{e.get('published', '2026-04-02T14:00:00+00:00')}</published>
+          <author><name>{e.get('author', 'Trader A')}</name></author>
+        </entry>
+        """
+        for e in entries
+    )
+    return (
+        '<feed xmlns="http://www.w3.org/2005/Atom" '
+        'xmlns:yt="http://www.youtube.com/xml/schemas/2015">' + body + "</feed>"
     )
 
-    def fake_fetch(url, timeout=15):
+
+class _FakeSnippet:
+    def __init__(self, text):
+        self.text = text
+
+
+def _install_fake_transcript_api(monkeypatch, mapping):
+    """Replace YouTubeTranscriptApi.fetch with a dict-driven stub."""
+    import youtube_transcript_api
+
+    class _FakeApi:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def fetch(self, video_id, languages=None):
+            if video_id in mapping:
+                return [_FakeSnippet(t) for t in mapping[video_id]]
+            raise RuntimeError(f"no transcript for {video_id}")
+
+    monkeypatch.setattr(youtube_transcript_api, "YouTubeTranscriptApi", _FakeApi)
+
+
+def test_youtube_adapter_extracts_transcript(monkeypatch):
+    feed_xml = _build_feed_xml(
+        [{"video_id": "abc123", "title": "SPY short put idea"}]
+    )
+
+    def fake_fetch(url, timeout=15, max_attempts=3):
         if "feeds/videos.xml" in url:
             return feed_xml
-        if "timedtext" in url:
-            return transcript_xml
-        return watch_html
+        return "<html><body>\"shortDescription\":\"Selling the SPY put here\"</body></html>"
 
     monkeypatch.setattr("vol_crush.idea_sources.adapters.safe_fetch_url", fake_fetch)
+    _install_fake_transcript_api(
+        monkeypatch, {"abc123": ["Sell the SPY put spread today"]}
+    )
 
     result = YouTubeChannelAdapter().fetch("test-channel", limit=1)
 
     assert len(result.documents) == 1
     assert result.documents[0].metadata["has_transcript"] is True
     assert "Sell the SPY put spread today" in result.documents[0].text
+
+
+def test_youtube_adapter_title_filter_include(monkeypatch):
+    feed_xml = _build_feed_xml(
+        [
+            {"video_id": "v1", "title": "SPY earnings strangle setup"},
+            {"video_id": "v2", "title": "Harry Dent doom macro interview"},
+        ]
+    )
+    monkeypatch.setattr(
+        "vol_crush.idea_sources.adapters.safe_fetch_url",
+        lambda url, timeout=15, max_attempts=3: feed_xml if "feeds/videos.xml" in url else "",
+    )
+    _install_fake_transcript_api(monkeypatch, {"v1": ["Sell strangle"], "v2": ["Doom"]})
+
+    result = YouTubeChannelAdapter().fetch(
+        "ch", limit=5, title_include_keywords=["earnings", "strangle"]
+    )
+
+    assert [doc.metadata["video_id"] for doc in result.documents] == ["v1"]
+    assert any("skipped 1 videos" in note for note in result.notes)
+
+
+def test_youtube_adapter_title_filter_exclude(monkeypatch):
+    feed_xml = _build_feed_xml(
+        [
+            {"video_id": "v1", "title": "Harry Dent interview macro"},
+            {"video_id": "v2", "title": "SPY strangle 45 DTE"},
+        ]
+    )
+    monkeypatch.setattr(
+        "vol_crush.idea_sources.adapters.safe_fetch_url",
+        lambda url, timeout=15, max_attempts=3: feed_xml if "feeds/videos.xml" in url else "",
+    )
+    _install_fake_transcript_api(monkeypatch, {"v1": ["Interview"], "v2": ["Sell"]})
+
+    result = YouTubeChannelAdapter().fetch(
+        "ch", limit=5, title_exclude_keywords=["interview"]
+    )
+
+    assert [doc.metadata["video_id"] for doc in result.documents] == ["v2"]
 
 
 def test_extract_ideas_from_raw_documents_and_dedupe():
@@ -108,6 +172,131 @@ def test_extract_ideas_from_raw_documents_and_dedupe():
     assert len(ideas) == 2
     assert len(deduped) == 1
     assert deduped[0].source_url == "https://example.com/1"
+
+
+def test_transcript_archive_write_and_purge(tmp_path):
+    from datetime import datetime, timedelta
+
+    from vol_crush.idea_sources.transcript_archive import (
+        purge_older_than,
+        write_transcript,
+    )
+
+    doc = RawSourceDocument(
+        document_id="doc1",
+        source_type=SourceType.YOUTUBE.value,
+        source_name="youtube:ch",
+        title="SPY idea",
+        text="Sell the SPY put",
+        url="https://youtu.be/abc",
+        metadata={"video_id": "abc"},
+    )
+    path = write_transcript(tmp_path, doc)
+    assert path is not None
+    assert path.read_text(encoding="utf-8") == "Sell the SPY put"
+    meta = path.with_suffix(".meta.json")
+    assert meta.exists()
+
+    # Fast-forward: backdate the file so the purge sees it as stale.
+    stale_time = (datetime.now() - timedelta(days=30)).timestamp()
+    import os
+
+    os.utime(path, (stale_time, stale_time))
+    os.utime(meta, (stale_time, stale_time))
+
+    removed = purge_older_than(tmp_path, retention_days=14)
+    assert removed == 1
+    assert not path.exists()
+    assert not meta.exists()
+
+
+def test_summary_archive_writes_markdown(tmp_path):
+    from vol_crush.idea_scraper.summary_archive import write_summary
+
+    doc = RawSourceDocument(
+        document_id="doc1",
+        source_type=SourceType.YOUTUBE.value,
+        source_name="youtube:ch",
+        title="IVR matters today",
+        author="tastylive",
+        url="https://youtu.be/abc",
+        metadata={"video_id": "abc"},
+    )
+    summary = {
+        "headline": "Short premium opportunistic",
+        "macro_view": "Range-bound SPX",
+        "vol_view": "IV rank elevated",
+        "tickers": [
+            {"ticker": "SPY", "bias": "neutral", "notes": "IV rank 45"},
+        ],
+        "strategies_discussed": ["short strangles"],
+        "notable_quotes": ["Sell premium when IVR is high"],
+        "risks": "",
+        "actionable_ideas_present": True,
+    }
+    path = write_summary(tmp_path, doc, summary, model="openrouter:fake-model")
+    assert path.exists()
+    rendered = path.read_text(encoding="utf-8")
+    assert "# IVR matters today" in rendered
+    assert "**SPY**" in rendered
+    assert "short strangles" in rendered
+    assert "Sell premium" in rendered
+
+
+def test_fetch_url_retries_then_succeeds(monkeypatch):
+    from vol_crush.idea_sources import utils
+
+    calls = []
+    sleeps = []
+
+    class _FakeResponse:
+        def __init__(self, body):
+            self.body = body.encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return self.body
+
+    def fake_urlopen(request, timeout, context):
+        calls.append(request.full_url)
+        if len(calls) < 3:
+            from urllib.error import HTTPError
+
+            raise HTTPError(request.full_url, 404, "Not Found", {}, None)
+        return _FakeResponse("ok")
+
+    monkeypatch.setattr(utils, "urlopen", fake_urlopen)
+
+    text = utils.fetch_url(
+        "https://example.com/f", sleep=lambda d: sleeps.append(d), base_delay=0.01
+    )
+    assert text == "ok"
+    assert len(calls) == 3
+    assert len(sleeps) == 2
+    assert sleeps[1] >= sleeps[0]  # exponential
+
+
+def test_fetch_url_raises_on_non_retryable(monkeypatch):
+    from urllib.error import HTTPError
+
+    from vol_crush.idea_sources import utils
+
+    def fake_urlopen(request, timeout, context):
+        raise HTTPError(request.full_url, 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr(utils, "urlopen", fake_urlopen)
+
+    try:
+        utils.fetch_url("https://example.com/f", sleep=lambda d: None)
+    except HTTPError as exc:
+        assert exc.code == 403
+    else:
+        raise AssertionError("expected HTTPError to propagate")
 
 
 def test_run_source_fetch_transcripts_saves_raw_documents(tmp_path, monkeypatch):
