@@ -1,5 +1,7 @@
 """Tests for optimizer, executor, position manager, and replay services."""
 
+from datetime import UTC, datetime
+
 from vol_crush.backtester.service import evaluate_strategy
 from vol_crush.core.models import (
     CandidatePosition,
@@ -16,7 +18,11 @@ from vol_crush.core.models import (
     TradeIdea,
     TradePlan,
 )
-from vol_crush.executor.service import _latest_trade_plan, create_pending_orders
+from vol_crush.executor.service import (
+    _latest_trade_plan,
+    _sheet_plan_approved,
+    create_pending_orders,
+)
 from vol_crush.integrations.fixtures import FixtureMarketDataProvider
 from vol_crush.integrations.storage import LocalStore
 from vol_crush.optimizer.service import build_trade_plan
@@ -68,6 +74,71 @@ def _sample_config(tmp_path):
             }
         },
     }
+
+
+def test_shadow_nlv_override_applies_to_zero_snapshot(tmp_path):
+    from vol_crush.optimizer.service import _apply_shadow_nlv_override
+
+    config = _sample_config(tmp_path)
+    config["execution"] = {"mode": "shadow", "shadow_net_liquidation_value": 100000.0}
+    snapshot = PortfolioSnapshot(
+        timestamp="2026-04-02T14:00:00+00:00",
+        net_liquidation_value=0.0,
+        greeks=Greeks(theta=120.0, gamma=6.0),
+        bpr_used=15000.0,
+    )
+
+    adjusted = _apply_shadow_nlv_override(snapshot, config)
+
+    assert adjusted.net_liquidation_value == 100000.0
+    assert adjusted.bpr_used_pct == 15.0
+    assert adjusted.theta_as_pct_nlv == 0.12
+    assert adjusted.gamma_theta_ratio == 0.0
+
+
+def test_resolve_regime_uses_sheet_override(tmp_path):
+    from vol_crush.optimizer.service import _resolve_regime
+
+    today = datetime.now(UTC).date().isoformat()
+    cache_dir = tmp_path / "sheet_cache"
+    cache_dir.mkdir()
+    (cache_dir / "regime_control.json").write_text(
+        __import__("json").dumps(
+            {
+                "rows": [
+                    {
+                        "date": today,
+                        "regime": "high_iv",
+                        "override_enabled": True,
+                        "note": "manual override",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = _sample_config(tmp_path)
+    config["google_sheets"] = {"enabled": True, "cache_dir": str(cache_dir)}
+
+    regime, policy = _resolve_regime(config, [])
+
+    assert regime == MarketRegime.HIGH_IV
+    assert "short_strangle" in policy.prefer_structures
+
+
+def test_resolve_regime_falls_back_to_local_evaluator(tmp_path):
+    from vol_crush.optimizer.service import _resolve_regime
+
+    config = _sample_config(tmp_path)
+    snapshots = [
+        __import__("types").SimpleNamespace(iv_rank=40.0, event_risk=False),
+        __import__("types").SimpleNamespace(iv_rank=38.0, event_risk=False),
+    ]
+
+    regime, policy = _resolve_regime(config, snapshots)
+
+    assert regime == MarketRegime.HIGH_IV
+    assert "short_strangle" in policy.prefer_structures
 
 
 def _sample_bundle(tmp_path):
@@ -379,6 +450,7 @@ def test_pending_executor_sizes_order(tmp_path):
     assert len(orders) == 1
     assert isinstance(orders[0], PendingOrder)
     assert orders[0].action == TradeAction.OPEN
+    assert orders[0].idea_id == "idea_1"
     assert orders[0].estimated_bpr >= 850.0
 
 
@@ -468,6 +540,68 @@ def test_latest_trade_plan_uses_created_at_not_random_id() -> None:
     )
 
     assert _latest_trade_plan([new_plan, old_plan]) is new_plan
+
+
+def test_sheet_plan_approval_requires_all_plan_rows(tmp_path) -> None:
+    config = _sample_config(tmp_path)
+    cache_dir = tmp_path / "sheet_cache"
+    cache_dir.mkdir()
+    config["google_sheets"] = {"enabled": True, "cache_dir": str(cache_dir)}
+    plan = TradePlan(
+        plan_id="plan_1",
+        created_at="2026-04-02T14:00:00+00:00",
+        decision=PlanDecision.EXECUTE,
+        regime=MarketRegime.NORMAL_IV.value,
+    )
+
+    approved, note = _sheet_plan_approved(config, plan)
+    assert approved is False
+    assert "no daily_plan" in note
+
+    (cache_dir / "daily_plan.json").write_text(
+        __import__("json").dumps(
+            {
+                "rows": [
+                    {"plan_id": "plan_1", "approval": "approve"},
+                    {"plan_id": "plan_1", "approval": ""},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    approved, note = _sheet_plan_approved(config, plan)
+    assert approved is False
+    assert "not approved" in note
+
+    (cache_dir / "daily_plan.json").write_text(
+        __import__("json").dumps(
+            {"rows": [{"plan_id": "plan_1", "approval": "approve"}]}
+        ),
+        encoding="utf-8",
+    )
+    approved, note = _sheet_plan_approved(config, plan)
+    assert approved is True
+    assert "approved" in note
+
+
+def test_sheet_plan_approval_can_be_bypassed(tmp_path) -> None:
+    config = _sample_config(tmp_path)
+    config["google_sheets"] = {
+        "enabled": True,
+        "cache_dir": str(tmp_path / "missing_cache"),
+    }
+    config["execution"] = {"bypass_daily_plan_approval": True}
+    plan = TradePlan(
+        plan_id="plan_1",
+        created_at="2026-04-02T14:00:00+00:00",
+        decision=PlanDecision.EXECUTE,
+        regime=MarketRegime.NORMAL_IV.value,
+    )
+
+    approved, note = _sheet_plan_approved(config, plan)
+
+    assert approved is True
+    assert "bypass enabled" in note
 
 
 def test_position_manager_emits_close_signal(tmp_path, monkeypatch):

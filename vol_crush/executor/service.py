@@ -21,7 +21,11 @@ from vol_crush.core.models import (
 )
 from vol_crush.integrations.public_broker import PublicBrokerAdapter
 from vol_crush.integrations.storage import build_local_store
-from vol_crush.optimizer.service import _project_portfolio, evaluate_constraints
+from vol_crush.optimizer.service import (
+    _apply_shadow_nlv_override,
+    _project_portfolio,
+    evaluate_constraints,
+)
 from vol_crush.portfolio_sync.service import sync_public_portfolio
 
 logger = logging.getLogger("vol_crush.executor")
@@ -91,6 +95,26 @@ def _latest_trade_plan(plans: list[TradePlan]) -> TradePlan | None:
     return max(plans, key=_created_at_key)
 
 
+def _sheet_plan_approved(config: dict, plan: TradePlan) -> tuple[bool, str]:
+    """Require operator approval from daily_plan when sheet sync is enabled."""
+    if bool((config.get("execution") or {}).get("bypass_daily_plan_approval", False)):
+        return True, "daily_plan approval bypass enabled"
+    if not (config.get("google_sheets") or {}).get("enabled", False):
+        return True, "sheet approval disabled"
+    try:
+        from vol_crush.sheets.sync import read_daily_plan_cache
+    except ImportError:
+        return False, "daily_plan cache reader unavailable"
+
+    rows = [row for row in read_daily_plan_cache(config) if row.plan_id == plan.plan_id]
+    if not rows:
+        return False, f"no daily_plan approval rows found for {plan.plan_id}"
+    unapproved = [row for row in rows if row.approval != "approve"]
+    if unapproved:
+        return False, f"{len(unapproved)} daily_plan rows are not approved"
+    return True, "daily_plan approved"
+
+
 def create_pending_orders(
     plan: TradePlan, portfolio: PortfolioSnapshot, config: dict
 ) -> list[PendingOrder]:
@@ -120,6 +144,7 @@ def create_pending_orders(
             PendingOrder(
                 pending_order_id=f"pending_{uuid.uuid4().hex[:10]}",
                 plan_id=plan.plan_id,
+                idea_id=candidate.idea_id,
                 created_at=created_at,
                 action=TradeAction.OPEN,
                 status=OrderStatus.PENDING.value,
@@ -144,10 +169,15 @@ def execute_latest_plan(config: dict) -> list[PendingOrder]:
     if latest is None:
         logger.info("No trade plans found.")
         return []
+    approved, approval_note = _sheet_plan_approved(config, latest)
+    if not approved:
+        logger.info("Skipping executor for %s: %s", latest.plan_id, approval_note)
+        return []
     snapshot = store.get_latest_portfolio_snapshot() or PortfolioSnapshot(
         timestamp=datetime.now(timezone.utc).isoformat(),
         net_liquidation_value=100000.0,
     )
+    snapshot = _apply_shadow_nlv_override(snapshot, config)
     orders = create_pending_orders(latest, snapshot, config)
     if orders:
         store.save_pending_orders(orders)

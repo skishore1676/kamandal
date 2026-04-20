@@ -11,7 +11,7 @@ from vol_crush.idea_sources.adapters import (
     TranscriptDirectoryAdapter,
     YouTubeChannelAdapter,
 )
-from vol_crush.idea_sources.fetcher import run_source_fetch
+from vol_crush.idea_sources.fetcher import _dedupe_documents, run_source_fetch
 from vol_crush.integrations.storage import LocalStore
 
 
@@ -24,6 +24,31 @@ def test_transcript_directory_adapter_reads_documents(tmp_path):
     assert len(result.documents) == 1
     assert result.documents[0].source_type == SourceType.TRANSCRIPT.value
     assert "SPY put spread" in result.documents[0].text
+
+
+def test_dedupe_documents_queues_stored_unextracted_duplicate():
+    existing = RawSourceDocument(
+        document_id="doc_existing",
+        source_type=SourceType.YOUTUBE.value,
+        source_name="youtube:ch",
+        title="SPY idea",
+        text="Sell the SPY put spread",
+        fingerprint="fp1",
+    )
+    incoming = RawSourceDocument(
+        document_id="doc_incoming",
+        source_type=SourceType.YOUTUBE.value,
+        source_name="youtube:ch",
+        title="SPY idea",
+        text="Sell the SPY put spread",
+        fingerprint="fp1",
+    )
+
+    kept, duplicates, unextracted_existing = _dedupe_documents([existing], [incoming])
+
+    assert kept == []
+    assert duplicates == 1
+    assert unextracted_existing == [existing]
 
 
 def _build_feed_xml(entries):
@@ -172,6 +197,53 @@ def test_extract_ideas_from_raw_documents_and_dedupe():
     assert len(ideas) == 2
     assert len(deduped) == 1
     assert deduped[0].source_url == "https://example.com/1"
+
+
+def test_extract_ideas_skips_missing_underlying():
+    llm = MagicMock()
+    llm.chat_json.return_value = {
+        "ideas": [
+            {
+                "trader_name": "Trader A",
+                "show_name": "Show",
+                "underlying": "",
+                "strategy_type": "short_strangle",
+                "description": "Sell earnings strangles on overhyped names",
+                "expiration": "45 DTE",
+                "credit_target": "",
+                "rationale": "Post-earnings vol crush",
+                "confidence": "low",
+                "timestamp_approx": "04:20",
+            },
+            {
+                "trader_name": "Trader A",
+                "show_name": "Show",
+                "underlying": "SPY",
+                "strategy_type": "short_put",
+                "description": "Sell the SPY 45 DTE put",
+                "expiration": "2026-05-15",
+                "credit_target": "$2.10",
+                "rationale": "IV elevated",
+                "confidence": "high",
+                "timestamp_approx": "12:00",
+            },
+        ]
+    }
+    docs = [
+        RawSourceDocument(
+            document_id="doc1",
+            source_type=SourceType.WEB.value,
+            source_name="web",
+            title="Ideas",
+            url="https://example.com/1",
+            text="ideas",
+        )
+    ]
+
+    ideas = extract_ideas_from_raw_documents(llm, docs)
+
+    assert len(ideas) == 1
+    assert ideas[0].underlying == "SPY"
 
 
 def test_transcript_archive_write_and_purge(tmp_path):

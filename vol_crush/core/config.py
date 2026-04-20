@@ -9,12 +9,26 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _CONFIG_DIR = _PROJECT_ROOT / "config"
+
+
+def _env_int(name: str) -> int | None:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def _env_float(name: str) -> float | None:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return None
+    return float(value)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -89,14 +103,42 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
             else None
         ),
         "backtesting.polygon.api_key": os.environ.get("VOL_CRUSH_POLYGON_API_KEY"),
-        "regime_bridge.credentials_path": os.environ.get("GOOGLE_API_CREDENTIALS_PATH"),
-        "regime_bridge.sheet_id": os.environ.get("TRADE_LAB_BRIDGE_SHEET_ID"),
-        "regime_bridge.sheet_name": os.environ.get("TRADE_LAB_BRIDGE_SHEET_NAME"),
+        "idea_sources.youtube.limit": _env_int("VOL_CRUSH_YOUTUBE_LIMIT"),
+        "execution.bypass_daily_plan_approval": (
+            os.environ.get("VOL_CRUSH_BYPASS_DAILY_PLAN_APPROVAL", "").lower()
+            in {"1", "true", "yes"}
+            if os.environ.get("VOL_CRUSH_BYPASS_DAILY_PLAN_APPROVAL") is not None
+            else None
+        ),
+        "execution.auto_approve_ideas": (
+            os.environ.get("VOL_CRUSH_AUTO_APPROVE_IDEAS", "").lower()
+            in {"1", "true", "yes"}
+            if os.environ.get("VOL_CRUSH_AUTO_APPROVE_IDEAS") is not None
+            else None
+        ),
+        "execution.shadow_net_liquidation_value": _env_float(
+            "VOL_CRUSH_SHADOW_NLV"
+        ),
+        "portfolio.constraints.max_single_underlying_pct": _env_float(
+            "VOL_CRUSH_MAX_SINGLE_UNDERLYING_PCT"
+        ),
     }
 
     for dotted_key, value in env_overrides.items():
         if value is not None:
             _set_nested(config, dotted_key, value)
+
+    theta_min = _env_float("VOL_CRUSH_DAILY_THETA_MIN_PCT")
+    theta_max = _env_float("VOL_CRUSH_DAILY_THETA_MAX_PCT")
+    if theta_min is not None or theta_max is not None:
+        current = (
+            (config.get("portfolio") or {}).get("constraints") or {}
+        ).get("daily_theta_pct", [0.10, 0.30])
+        if not isinstance(current, list) or len(current) < 2:
+            current = [0.10, 0.30]
+        lower = theta_min if theta_min is not None else current[0]
+        upper = theta_max if theta_max is not None else current[1]
+        _set_nested(config, "portfolio.constraints.daily_theta_pct", [lower, upper])
 
     return config
 
@@ -203,3 +245,15 @@ def get_transcripts_dir() -> Path:
 def get_data_dir() -> Path:
     """Return the root data directory."""
     return _PROJECT_ROOT / "data"
+
+
+def shadow_net_liquidation_value(config: Mapping[str, Any]) -> float | None:
+    """Return the configured shadow-mode NLV override when set."""
+    raw = (config.get("execution") or {}).get("shadow_net_liquidation_value")
+    if raw in (None, ""):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None

@@ -10,6 +10,7 @@ from pathlib import Path
 from vol_crush.backtester.service import run_backtests
 from vol_crush.core.config import load_config
 from vol_crush.core.logging import setup_logging
+from vol_crush.core.strategy_aliases import infer_expectation, operator_strategy_label
 from vol_crush.executor.service import execute_latest_plan
 from vol_crush.idea_sources.fetcher import run_source_fetch
 from vol_crush.integrations.fixtures import (
@@ -49,6 +50,12 @@ def _try_sheet_pull(config: dict, logger: logging.Logger) -> None:
                 report.idea_review.changed,
                 report.idea_review.stamped_rows,
             )
+        if report.daily_plan:
+            logger.info(
+                "Sheet pull: daily_plan rows=%d changed=%s",
+                report.daily_plan.rows_fetched,
+                report.daily_plan.changed,
+            )
         for err in report.errors:
             logger.warning("Sheet pull error: %s", err)
     except Exception as exc:  # noqa: BLE001 — sheet is best-effort
@@ -64,26 +71,38 @@ def _push_recent_ideas_to_sheet(
 
         cutoff = (date.today() - timedelta(days=lookback_days)).isoformat()
         rows: list[IdeaReviewRow] = []
+        skipped_missing_underlying = 0
         for idea in store.list_trade_ideas():
             if idea.date and idea.date < cutoff:
                 continue
+            if not str(idea.underlying or "").strip():
+                skipped_missing_underlying += 1
+                continue
             rows.append(
                 IdeaReviewRow(
-                    idea_id=idea.id,
                     date=idea.date,
                     underlying=idea.underlying,
-                    strategy_type=idea.strategy_type,
+                    expectation=infer_expectation(idea.strategy_type),
+                    proposed_strategy=operator_strategy_label(idea.strategy_type),
+                    note=idea.description or idea.rationale,
+                    idea_id=idea.id,
                     description=idea.description,
-                    strikes=list(idea.strikes or []),
+                    rationale=idea.rationale,
                     expiration=idea.expiration,
                     confidence=idea.confidence,
                     host=idea.host or idea.trader_name,
                     video_id=idea.video_id,
                     source_url=idea.source_url,
+                    source_timestamp=idea.source_timestamp,
                 )
             )
         push_idea_review(config, rows)
         logger.info("Sheet push: idea_review %d ideas from last %dd", len(rows), lookback_days)
+        if skipped_missing_underlying:
+            logger.info(
+                "Sheet push: skipped %d ideas with missing underlying",
+                skipped_missing_underlying,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Sheet push idea_review failed (%s: %s); continuing",
@@ -94,50 +113,38 @@ def _push_recent_ideas_to_sheet(
 
 def _push_plan_and_positions(config: dict, store, plan, logger: logging.Logger) -> None:
     try:
-        from vol_crush.sheets.schemas import DailyPlanRow, PositionRow
-        from vol_crush.sheets.sync import push_daily_plan, push_positions
+        from vol_crush.sheets.schemas import DailyPlanRow
+        from vol_crush.sheets.sync import push_daily_plan
 
         created_at = plan.created_at if plan.created_at else datetime.now(UTC).isoformat()
         plan_rows: list[DailyPlanRow] = []
-        if not plan.combos:
+        if not plan.candidate_positions:
             plan_rows.append(
                 DailyPlanRow(
                     plan_id=plan.plan_id,
                     date=date.today().isoformat(),
                     decision=plan.decision.value,
-                    combo_description=plan.reasoning or "",
-                    regime=plan.regime,
-                    risk_flags=list(plan.risk_flags or []),
-                    execution_mode=str((config.get("execution") or {}).get("mode", "")),
+                    note=plan.reasoning or "",
                     created_at=created_at,
                 )
             )
         else:
-            for combo in plan.combos:
-                descr = getattr(combo, "description", "") or getattr(
-                    combo, "reasoning", ""
+            for candidate in plan.candidate_positions:
+                note = (
+                    f"{plan.decision.value}; est_credit={candidate.estimated_credit}; "
+                    f"est_bpr={candidate.estimated_bpr}; regime={plan.regime}"
                 )
+                if candidate.rationale:
+                    note = f"{note}; {candidate.rationale}"
                 plan_rows.append(
                     DailyPlanRow(
                         plan_id=plan.plan_id,
                         date=date.today().isoformat(),
                         decision=plan.decision.value,
-                        combo_description=descr,
-                        underlying=getattr(combo, "underlying", ""),
-                        strategy=getattr(combo, "strategy_id", ""),
-                        strikes=list(getattr(combo, "strikes", []) or []),
-                        expiration=getattr(combo, "expiration", ""),
-                        quantity=int(getattr(combo, "quantity", 0) or 0),
-                        est_credit=float(getattr(combo, "estimated_credit", 0.0) or 0.0),
-                        est_bpr=float(getattr(combo, "estimated_bpr", 0.0) or 0.0),
-                        est_max_loss=float(
-                            getattr(combo, "estimated_max_loss", 0.0) or 0.0
-                        ),
-                        regime=plan.regime,
-                        risk_flags=list(plan.risk_flags or []),
-                        execution_mode=str(
-                            (config.get("execution") or {}).get("mode", "")
-                        ),
+                        underlying=candidate.underlying,
+                        strategy=operator_strategy_label(candidate.strategy_type),
+                        note=note,
+                        idea_id=candidate.idea_id,
                         created_at=created_at,
                     )
                 )
@@ -146,47 +153,6 @@ def _push_plan_and_positions(config: dict, store, plan, logger: logging.Logger) 
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Sheet push daily_plan failed (%s: %s); continuing",
-            type(exc).__name__,
-            exc,
-        )
-
-    try:
-        from vol_crush.sheets.schemas import PositionRow
-        from vol_crush.sheets.sync import push_positions
-
-        position_rows: list[PositionRow] = []
-        for position in store.list_positions():
-            legs_summary = ", ".join(
-                f"{leg.action} {leg.quantity} {leg.strike}{leg.option_type[0].upper()}"
-                for leg in (getattr(position, "legs", None) or [])
-            )
-            position_rows.append(
-                PositionRow(
-                    group_id=getattr(position, "position_id", ""),
-                    strategy_type=getattr(position, "strategy_type", ""),
-                    underlying=getattr(position, "underlying", ""),
-                    legs_summary=legs_summary,
-                    expiration=getattr(position, "expiration", ""),
-                    quantity=int(getattr(position, "quantity", 0) or 0),
-                    net_delta=float(getattr(position, "net_delta", 0.0) or 0.0),
-                    net_theta=float(getattr(position, "net_theta", 0.0) or 0.0),
-                    bpr_used=float(getattr(position, "bpr_used", 0.0) or 0.0),
-                    pnl_unrealized=float(
-                        getattr(position, "pnl_unrealized", 0.0) or 0.0
-                    ),
-                    management_status=str(
-                        getattr(position, "management_status", "")
-                    ),
-                    source=str(getattr(position, "source", "")),
-                    opened_at=str(getattr(position, "opened_at", "") or ""),
-                    days_open=int(getattr(position, "days_open", 0) or 0),
-                )
-            )
-        push_positions(config, position_rows)
-        logger.info("Sheet push: positions %d rows", len(position_rows))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Sheet push positions failed (%s: %s); continuing",
             type(exc).__name__,
             exc,
         )
@@ -206,6 +172,12 @@ def main() -> None:
         help="Optionally fetch fresh source content before optimization",
     )
     parser.add_argument(
+        "--source-limit",
+        type=int,
+        default=None,
+        help="Max items per configured source feed/channel when fetching sources",
+    )
+    parser.add_argument(
         "--no-sheet-sync",
         action="store_true",
         help="Skip Google Sheet pull/push even if enabled in config",
@@ -219,9 +191,13 @@ def main() -> None:
     sheets_enabled = _sheets_enabled(
         config, cli_override=False if args.no_sheet_sync else None
     )
+    if not sheets_enabled:
+        config.setdefault("google_sheets", {})["enabled"] = False
 
     for source in args.fetch_sources:
-        documents, ideas, notes = run_source_fetch(config, source, extract_ideas=True)
+        documents, ideas, notes = run_source_fetch(
+            config, source, limit=args.source_limit, extract_ideas=True
+        )
         logger.info(
             "Source fetch [%s]: %d documents, %d ideas",
             source,

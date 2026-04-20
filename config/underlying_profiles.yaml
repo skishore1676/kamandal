@@ -79,3 +79,105 @@ profiles:
       Decorrelation play. Calendar spreads allowed here because commodity
       vol often mean-reverts predictably, making the structure viable
       even at low absolute IV.
+
+  # ── Single-name stock buckets ─────────────────────────────────────────
+  # Operator-maintained universes. Keep these conservative until live market
+  # data, earnings filters, and liquidity checks are proven in shadow mode.
+  - profile_id: large_stocks
+    name: "Large-cap stocks"
+    symbols:
+      - BRKB
+      - BABA
+      - PDD
+      - SPOT
+      - XOM
+      - GE
+      - UBER
+      - V
+      - PLTR
+      - NFLX
+      - COST
+      - BA
+      - UNH
+      - INTU
+      - SBUX
+      - JPM
+      - PEP
+      - WFC
+      - WMT
+      - SPY
+      - QCOM
+      - AAPL
+      - PFE
+      - GS
+      - TXN
+      - QQQ
+      - HD
+      - LOW
+      - BAC
+      - FSR
+      - AXP
+      - META
+      - MS
+      - MSFT
+      - DHR
+      - SHOP
+      - AMZN
+      - DIS
+      - TSM
+      - AMAT
+      - GOOGL
+      - AMD
+      - CRM
+      - NVDA
+      - AVGO
+      - NOW
+      - TSLA
+      - MRVL
+      - VRT
+      - DELL
+    allowed_structures:
+      - put_spread
+      - call_spread
+      - iron_condor
+    max_bpr_pct: 8
+    max_per_position_pct: 4
+    max_positions: 3
+    earnings_sensitive: true
+    min_option_volume: 1000
+    min_open_interest: 2000
+    notes: >-
+      Liquid single names only. Undefined-risk structures stay disabled here
+      until earnings/event-risk handling is stronger.
+
+  - profile_id: mid_stocks
+    name: "Mid-cap stocks"
+    symbols: [ADBE]
+    allowed_structures:
+      - put_spread
+      - call_spread
+    max_bpr_pct: 5
+    max_per_position_pct: 3
+    max_positions: 2
+    earnings_sensitive: true
+    min_option_volume: 500
+    min_open_interest: 1000
+    notes: >-
+      Fill manually with liquid names only after spreads and open interest are
+      checked. Empty by default.
+
+  - profile_id: small_stocks
+    name: "Small-cap stocks"
+    symbols: []
+    allowed_structures:
+      - put_spread
+      - call_spread
+    max_bpr_pct: 3
+    max_per_position_pct: 2
+    max_positions: 1
+    earnings_sensitive: true
+    min_option_volume: 300
+    min_open_interest: 500
+    notes: >-
+      Empty by default. Small-cap option books can get illiquid quickly, so
+      add names deliberately.

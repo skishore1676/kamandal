@@ -22,7 +22,6 @@ def test_load_config_from_example():
     """Config loader should fall back to config.example.yaml."""
     config = load_config(get_project_root() / "config" / "config.example.yaml")
     assert config["app"]["name"] == "kamandal"
-    assert config["app"]["mode"] == "dry_run"
     assert "openai" in config
     assert "portfolio" in config
     assert "storage" in config
@@ -52,6 +51,33 @@ def test_load_config_env_override(monkeypatch):
     monkeypatch.setenv("VOL_CRUSH_OPENAI_API_KEY", "sk-test-key-123")
     config = load_config()
     assert config["openai"]["api_key"] == "sk-test-key-123"
+
+
+def test_load_config_daily_plan_bypass_env(monkeypatch):
+    monkeypatch.setenv("VOL_CRUSH_BYPASS_DAILY_PLAN_APPROVAL", "true")
+    config = load_config(get_project_root() / "config" / "config.example.yaml")
+    assert config["execution"]["bypass_daily_plan_approval"] is True
+
+
+def test_load_config_auto_approve_ideas_env(monkeypatch):
+    monkeypatch.setenv("VOL_CRUSH_AUTO_APPROVE_IDEAS", "true")
+    config = load_config(get_project_root() / "config" / "config.example.yaml")
+    assert config["execution"]["auto_approve_ideas"] is True
+
+
+def test_load_config_youtube_limit_env(monkeypatch):
+    monkeypatch.setenv("VOL_CRUSH_YOUTUBE_LIMIT", "1")
+    config = load_config(get_project_root() / "config" / "config.example.yaml")
+    assert config["idea_sources"]["youtube"]["limit"] == 1
+
+
+def test_load_config_constraint_envs(monkeypatch):
+    monkeypatch.setenv("VOL_CRUSH_DAILY_THETA_MIN_PCT", "0.0")
+    monkeypatch.setenv("VOL_CRUSH_DAILY_THETA_MAX_PCT", "0.5")
+    monkeypatch.setenv("VOL_CRUSH_MAX_SINGLE_UNDERLYING_PCT", "60")
+    config = load_config(get_project_root() / "config" / "config.example.yaml")
+    assert config["portfolio"]["constraints"]["daily_theta_pct"] == [0.0, 0.5]
+    assert config["portfolio"]["constraints"]["max_single_underlying_pct"] == 60.0
 
 
 def test_set_nested():

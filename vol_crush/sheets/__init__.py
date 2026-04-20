@@ -4,9 +4,13 @@ from vol_crush.sheets.schemas import (
     DailyPlanRow,
     IdeaReviewRow,
     PositionRow,
+    ProfileConfigRow,
+    RegimeControlRow,
     StrategyApprovalRow,
+    TemplateLibraryRow,
     IdeaApproval,
     AuthorizationMode,
+    UniverseMemberRow,
 )
 
 __all__ = [
@@ -15,5 +19,9 @@ __all__ = [
     "IdeaApproval",
     "IdeaReviewRow",
     "PositionRow",
+    "ProfileConfigRow",
+    "RegimeControlRow",
     "StrategyApprovalRow",
+    "TemplateLibraryRow",
+    "UniverseMemberRow",
 ]

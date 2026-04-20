@@ -44,18 +44,30 @@ logger = logging.getLogger("vol_crush.idea_sources.fetcher")
 
 def _dedupe_documents(
     existing: list[RawSourceDocument], incoming: list[RawSourceDocument]
-) -> tuple[list[RawSourceDocument], int]:
-    fingerprints = {document.fingerprint for document in existing}
+) -> tuple[list[RawSourceDocument], int, list[RawSourceDocument]]:
+    existing_by_fingerprint = {
+        document.fingerprint: document for document in reversed(existing)
+    }
+    fingerprints = set(existing_by_fingerprint)
     kept = []
+    unextracted_existing = []
+    queued_existing_fingerprints = set()
     duplicates = 0
     for document in incoming:
-        if document.fingerprint in fingerprints:
+        existing_document = existing_by_fingerprint.get(document.fingerprint)
+        if existing_document is not None:
             document.status = RawContentStatus.DUPLICATE.value
             duplicates += 1
+            if (
+                existing_document.status != RawContentStatus.EXTRACTED.value
+                and existing_document.fingerprint not in queued_existing_fingerprints
+            ):
+                unextracted_existing.append(existing_document)
+                queued_existing_fingerprints.add(existing_document.fingerprint)
         else:
             fingerprints.add(document.fingerprint)
             kept.append(document)
-    return kept, duplicates
+    return kept, duplicates, unextracted_existing
 
 
 def _new_unique_ideas(
@@ -97,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--feed-url", action="append", default=[])
     parser.add_argument("--url", action="append", default=[])
     parser.add_argument("--transcripts-dir", type=Path, default=None)
-    parser.add_argument("--limit", type=int, default=5)
+    parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--extract-ideas", action="store_true")
     return parser.parse_args()
 
@@ -132,7 +144,7 @@ def run_source_fetch(
     feed_urls: list[str] | None = None,
     urls: list[str] | None = None,
     transcripts_dir: Path | None = None,
-    limit: int = 5,
+    limit: int | None = None,
     extract_ideas: bool = False,
     generate_summaries: bool = True,
 ) -> tuple[list[RawSourceDocument], list[TradeIdea], list[str]]:
@@ -155,8 +167,10 @@ def run_source_fetch(
         channel_ids = channel_ids or config.get("idea_sources", {}).get(
             "youtube", {}
         ).get("channel_ids", [])
-        if not limit:
-            limit = config.get("idea_sources", {}).get("youtube", {}).get("limit", 5)
+        if limit is None:
+            limit = int(
+                config.get("idea_sources", {}).get("youtube", {}).get("limit", 5)
+            )
         include_keywords, exclude_keywords = _youtube_title_filters(config)
         for channel_id in channel_ids:
             result = adapter.fetch(
@@ -172,8 +186,8 @@ def run_source_fetch(
         feed_urls = feed_urls or config.get("idea_sources", {}).get("rss", {}).get(
             "feed_urls", []
         )
-        if not limit:
-            limit = config.get("idea_sources", {}).get("rss", {}).get("limit", 5)
+        if limit is None:
+            limit = int(config.get("idea_sources", {}).get("rss", {}).get("limit", 5))
         for feed_url in feed_urls:
             result = adapter.fetch(feed_url=feed_url, limit=limit, source_name="rss")
             fetched.extend(result.documents)
@@ -205,43 +219,50 @@ def run_source_fetch(
                     exc,
                 )
 
-    kept, duplicates = _dedupe_documents(existing, fetched)
+    kept, duplicates, unextracted_existing = _dedupe_documents(existing, fetched)
     store.save_raw_documents(fetched)
+    extraction_documents = kept + unextracted_existing
     ideas: list[TradeIdea] = []
     notes.append(
         f"fetched {len(fetched)} raw documents ({len(kept)} new, {duplicates} duplicates)"
     )
+    if unextracted_existing:
+        notes.append(
+            f"queued {len(unextracted_existing)} stored duplicate documents for extraction"
+        )
 
-    if not extract_ideas or not kept:
+    if not extract_ideas:
         return kept, ideas, notes
+    if not extraction_documents:
+        return extraction_documents, ideas, notes
 
     try:
         llm = build_llm_client(config)
     except RuntimeError as exc:
         notes.append(f"{exc}; raw documents saved but idea extraction skipped.")
-        return kept, ideas, notes
+        return extraction_documents, ideas, notes
 
     # Summaries first — one LLM call per new transcript, saved to disk for
     # human review regardless of whether actionable ideas get extracted.
     if generate_summaries:
-        _run_summary_pass(llm, kept, summaries_root, notes)
+        _run_summary_pass(llm, extraction_documents, summaries_root, notes)
 
-    ideas = extract_ideas_from_raw_documents(llm, kept)
+    ideas = extract_ideas_from_raw_documents(llm, extraction_documents)
     unique_new_ideas = _new_unique_ideas(store.list_trade_ideas(), ideas)
-    for document in kept:
+    for document in extraction_documents:
         document.status = RawContentStatus.EXTRACTED.value
-    store.save_raw_documents(kept)
+    store.save_raw_documents(extraction_documents)
     if unique_new_ideas:
         for idea in unique_new_ideas:
             idea.status = IdeaStatus.NEW.value
         store.save_trade_ideas(unique_new_ideas)
     logger.info(
-        "Extracted %d ideas from %d new documents (%d unique after dedupe)",
+        "Extracted %d ideas from %d documents (%d unique after dedupe)",
         len(ideas),
-        len(kept),
+        len(extraction_documents),
         len(unique_new_ideas),
     )
-    return kept, unique_new_ideas, notes
+    return extraction_documents, unique_new_ideas, notes
 
 
 def _run_summary_pass(

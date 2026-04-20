@@ -1219,6 +1219,7 @@ class PendingOrder:
     estimated_credit: float
     estimated_bpr: float
     greeks_impact: Greeks
+    idea_id: str = ""
     notes: str = ""
     legs: list[OptionLeg] = field(default_factory=list)
     broker: str = ""
@@ -1233,6 +1234,7 @@ class PendingOrder:
         return {
             "pending_order_id": self.pending_order_id,
             "plan_id": self.plan_id,
+            "idea_id": self.idea_id,
             "created_at": self.created_at,
             "action": self.action.value,
             "status": self.status,
@@ -1260,6 +1262,7 @@ class PendingOrder:
         return cls(
             pending_order_id=d.get("pending_order_id", ""),
             plan_id=d.get("plan_id", ""),
+            idea_id=d.get("idea_id", ""),
             created_at=d.get("created_at", ""),
             action=action if isinstance(action, TradeAction) else TradeAction(action),
             status=d.get("status", OrderStatus.PENDING.value),

@@ -52,6 +52,34 @@ def main() -> None:
                 report.strategies.stamped_rows,
                 report.strategies.cache_path,
             )
+        if report.template_library:
+            logger.info(
+                "template_library: %d rows, changed=%s → %s",
+                report.template_library.rows_fetched,
+                report.template_library.changed,
+                report.template_library.cache_path,
+            )
+        if report.regime_control:
+            logger.info(
+                "regime_control: %d rows, changed=%s → %s",
+                report.regime_control.rows_fetched,
+                report.regime_control.changed,
+                report.regime_control.cache_path,
+            )
+        if report.profiles:
+            logger.info(
+                "profiles: %d rows, changed=%s → %s",
+                report.profiles.rows_fetched,
+                report.profiles.changed,
+                report.profiles.cache_path,
+            )
+        if report.universe:
+            logger.info(
+                "universe: %d rows, changed=%s → %s",
+                report.universe.rows_fetched,
+                report.universe.changed,
+                report.universe.cache_path,
+            )
         if report.idea_review:
             logger.info(
                 "idea_review: %d rows, changed=%s, stamped=%d → %s",
@@ -59,6 +87,13 @@ def main() -> None:
                 report.idea_review.changed,
                 report.idea_review.stamped_rows,
                 report.idea_review.cache_path,
+            )
+        if report.daily_plan:
+            logger.info(
+                "daily_plan: %d rows, changed=%s → %s",
+                report.daily_plan.rows_fetched,
+                report.daily_plan.changed,
+                report.daily_plan.cache_path,
             )
         for err in report.errors:
             logger.warning(err)

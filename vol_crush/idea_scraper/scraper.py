@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Iterable
 
 from vol_crush.core.models import IdeaStatus, RawSourceDocument, TradeIdea
+from vol_crush.core.strategy_aliases import canonical_strategy_type
 from vol_crush.integrations.llm import LLMClient
 from vol_crush.idea_scraper.prompts import (
     IDEA_EXTRACTION_SYSTEM_PROMPT,
@@ -93,13 +94,20 @@ def extract_ideas_from_transcript(
     extracted_at = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
     ideas = []
     for raw in raw_ideas:
+        underlying = (raw.get("underlying") or "").upper().strip()
+        if not underlying:
+            logger.info(
+                "Skipping extracted idea with missing underlying: %s",
+                raw.get("description", "")[:120],
+            )
+            continue
         idea = TradeIdea(
             id=f"idea_{uuid.uuid4().hex[:8]}",
             date=idea_date,
             trader_name=raw.get("trader_name") or raw.get("host") or "Unknown",
             show_name=raw.get("show_name", source),
-            underlying=(raw.get("underlying") or "").upper(),
-            strategy_type=raw.get("strategy_type", "other"),
+            underlying=underlying,
+            strategy_type=canonical_strategy_type(raw.get("strategy_type", "other")),
             description=raw.get("description", ""),
             expiration=raw.get("expiration", ""),
             credit_target=_parse_credit(raw.get("credit_target", "")),

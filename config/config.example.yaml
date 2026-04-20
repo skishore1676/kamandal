@@ -3,7 +3,6 @@
 
 app:
   name: kamandal
-  mode: dry_run  # dry_run | shadow | live   (pending = deprecated alias for shadow)
   log_level: INFO
 
 storage:
@@ -65,6 +64,10 @@ google_sheets:
   cache_dir: data/sheet_cache           # local JSON mirror used between syncs
   tabs:
     strategies: strategies              # READ: strategy approval control plane
+    template_library: template_library  # READ: structure-level template defaults / overrides
+    regime_control: regime_control      # READ: optional daily regime override
+    profiles: profiles                  # READ: stock_profile-level caps / rules
+    universe: universe                  # READ: symbol -> stock_profile membership
     idea_review: idea_review            # BIDIRECTIONAL: human approves LLM-extracted ideas
     daily_plan: daily_plan              # WRITE: today's optimizer output
     positions: positions                # WRITE: grouped Positions with health flags
@@ -214,33 +217,13 @@ execution:
   price_step_cents: 1
   fill_timeout_seconds: 120
   max_slippage_pct: 2.0
+  shadow_net_liquidation_value: 100000.0  # used only in dry_run/shadow when broker NLV is zero
+  auto_approve_ideas: false              # pending/missing idea_review rows pass unless explicitly reject/hold
   max_contracts_per_order: 1   # first-live-test guardrail; raise deliberately later
   submit_to_broker: true
-
-# Dry run
-dry_run:
-  duration_days: 7
-  auto_approve: false  # require human sign-off after dry run
 
 # Audio capture (Module 1)
 audio:
   capture_device: default  # or specific device name
   sample_rate: 16000
   channels: 1
-
-# Notifications
-notifications:
-  slack:
-    enabled: false
-    webhook_url: ""
-  discord:
-    enabled: false
-    webhook_url: ""
-
-# Schedule (24h format, Eastern Time)
-schedule:
-  execution_window_start: "09:35"
-  execution_window_end: "15:45"
-  position_check_interval_minutes: 15
-  eod_reconciliation: "16:15"
-  portfolio_snapshot: "16:30"
