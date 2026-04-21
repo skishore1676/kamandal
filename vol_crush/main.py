@@ -14,10 +14,10 @@ from vol_crush.core.strategy_aliases import infer_expectation, operator_strategy
 from vol_crush.executor.service import execute_latest_plan
 from vol_crush.idea_sources.fetcher import run_source_fetch
 from vol_crush.integrations.fixtures import (
-    FixtureMarketDataProvider,
     build_fixture_payload,
     write_fixture_artifacts,
 )
+from vol_crush.integrations.market_data import build_market_data_provider
 from vol_crush.integrations.storage import build_local_store
 from vol_crush.optimizer.service import build_trade_plan
 from vol_crush.portfolio_sync.service import sync_public_portfolio
@@ -218,7 +218,7 @@ def main() -> None:
     bundle_path, replay_path = write_fixture_artifacts(config, payload, replay_trades)
     store.save_fixture_payload(payload)
     store.save_replay_trades(replay_trades)
-    provider = FixtureMarketDataProvider(bundle_path)
+    provider = build_market_data_provider(config, bundle_path)
     logger.info("Fixture refresh complete: %s and %s", bundle_path, replay_path)
 
     if not args.skip_backtest:

@@ -88,15 +88,16 @@ def test_fixture_builder_imports_gds_and_replay(tmp_path):
     conn.execute(
         """
         INSERT INTO market_observations (
-            timestamp, symbol, stock_price, call_strike, call_bid, call_ask, call_last,
-            call_delta, call_gamma, call_theta, call_vega, call_iv, call_gds, put_strike,
+            timestamp, symbol, stock_price, call_symbol, call_strike, call_bid, call_ask, call_last,
+            call_delta, call_gamma, call_theta, call_vega, call_iv, call_gds, put_symbol, put_strike,
             put_bid, put_ask, put_last, put_delta, put_gamma, put_theta, put_vega, put_iv, put_gds
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             "2026-04-01T14:00:00+00:00",
             "SPY",
             520.0,
+            "SPY260516C00525000",
             525.0,
             2.1,
             2.3,
@@ -107,6 +108,7 @@ def test_fixture_builder_imports_gds_and_replay(tmp_path):
             0.12,
             0.24,
             0.1,
+            "SPY260516P00515000",
             515.0,
             1.9,
             2.1,
@@ -172,5 +174,7 @@ def test_fixture_builder_imports_gds_and_replay(tmp_path):
     snapshot = provider.get_market_snapshot("SPY")
     assert snapshot is not None
     assert snapshot.underlying_price == 520.0
+    assert snapshot.option_snapshots[0].expiration == "2026-05-16"
+    assert snapshot.option_snapshots[1].expiration == "2026-05-16"
     assert bundle_path.exists()
     assert replay_path.exists()

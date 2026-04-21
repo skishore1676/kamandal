@@ -77,8 +77,8 @@ class PublicBrokerSettings:
         "https://api.public.com/userapiauthservice/personal/access-tokens"
     )
     account_id: str = ""
-    session_file: str = "data/cache/public_session.json"
-    account_cache_file: str = "data/cache/public_account.json"
+    session_file: str = "config/public_session.json"
+    account_cache_file: str = "config/public_account.json"
     token_validity_minutes: int = 60
     api_requests_per_second: float = 5.0
     api_burst_limit: int = 5
@@ -113,6 +113,10 @@ class PublicBrokerSettings:
     def validate_credentials(self) -> None:
         if not self.secret_token:
             raise ValueError("PUBLIC_SECRET_TOKEN is not configured")
+        if self.api_base_url.rstrip("/").endswith("/sandbox"):
+            raise ValueError(
+                "PUBLIC_API_BASE_URL points to sandbox; switch to https://api.public.com"
+            )
 
 
 class PublicRateLimiter:

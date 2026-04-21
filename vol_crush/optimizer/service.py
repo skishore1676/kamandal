@@ -19,7 +19,7 @@ from vol_crush.core.config import (
     load_underlying_profiles,
     shadow_net_liquidation_value,
 )
-from vol_crush.core.interfaces import RegimeEvaluator, StorageBackend
+from vol_crush.core.interfaces import MarketDataProvider, RegimeEvaluator, StorageBackend
 from vol_crush.core.logging import setup_logging
 from vol_crush.core.models import (
     CandidatePosition,
@@ -48,7 +48,7 @@ from vol_crush.core.strategy_aliases import (
     canonical_strategy_type,
     strategy_profile_key,
 )
-from vol_crush.integrations.fixtures import FixtureMarketDataProvider
+from vol_crush.integrations.market_data import build_market_data_provider
 from vol_crush.integrations.storage import build_local_store
 
 logger = logging.getLogger("vol_crush.optimizer")
@@ -286,16 +286,17 @@ def _execution_mode(config: dict) -> str:
 def _apply_shadow_nlv_override(
     snapshot: PortfolioSnapshot, config: Mapping[str, Any]
 ) -> PortfolioSnapshot:
-    """Use a configured paper NLV when the synced broker snapshot reports zero.
+    """Use a configured paper NLV when the synced broker snapshot is too small.
 
     This is only active outside live mode. It keeps shadow-mode planning useful
-    on brand-new or disconnected accounts where the broker snapshot can come
-    back with ``net_liquidation_value=0``.
+    on brand-new or lightly funded accounts where the broker snapshot can come
+    back with a placeholder balance that is much smaller than the intended
+    shadow bankroll.
     """
     if _execution_mode(dict(config)) == "live":
         return snapshot
     override = shadow_net_liquidation_value(config)
-    if override is None or snapshot.net_liquidation_value > 0:
+    if override is None or snapshot.net_liquidation_value >= override:
         return snapshot
     adjusted = PortfolioSnapshot.from_dict(snapshot.to_dict())
     adjusted.net_liquidation_value = override
@@ -602,31 +603,109 @@ def _find_strategy_for_idea(
     return None
 
 
-def _pick_option(snapshot: MarketSnapshot, option_type: str):
-    for item in snapshot.option_snapshots:
-        if item.option_type == option_type:
-            return item
-    return None
+def _option_dte(option) -> int:
+    expiry = _option_expiry_date(option)
+    if expiry is None:
+        return 9999
+    return (expiry - datetime.now(timezone.utc).date()).days
+
+
+def _pick_option(
+    snapshot: MarketSnapshot,
+    option_type: str,
+    *,
+    delta_range: tuple[float, float],
+    dte_range: tuple[int, int],
+    expiration: str | None = None,
+):
+    options = [
+        item
+        for item in _active_option_snapshots(snapshot)
+        if item.option_type == option_type
+    ]
+    if expiration:
+        matching_expiration = [item for item in options if item.expiration == expiration]
+        if matching_expiration:
+            options = matching_expiration
+    if not options:
+        return None
+
+    target_delta = (delta_range[0] + delta_range[1]) / 2.0
+    target_dte = (dte_range[0] + dte_range[1]) / 2.0
+
+    def score(item) -> tuple[float, ...]:
+        abs_delta = abs(item.greeks.delta)
+        dte = _option_dte(item)
+        delta_penalty = (
+            0.0
+            if delta_range[0] <= abs_delta <= delta_range[1]
+            else min(abs(abs_delta - delta_range[0]), abs(abs_delta - delta_range[1]))
+            + 1.0
+        )
+        dte_penalty = (
+            0.0
+            if dte_range[0] <= dte <= dte_range[1]
+            else min(abs(dte - dte_range[0]), abs(dte - dte_range[1])) + 1.0
+        )
+        return (
+            delta_penalty,
+            dte_penalty,
+            abs(abs_delta - target_delta),
+            abs(dte - target_dte),
+            abs(item.strike - snapshot.underlying_price),
+        )
+
+    return min(options, key=score)
 
 
 def _default_expiration(snapshot: MarketSnapshot) -> str:
-    if snapshot.option_snapshots:
-        return snapshot.option_snapshots[0].expiration
+    active = _active_option_snapshots(snapshot)
+    if active:
+        return active[0].expiration
     return datetime.now(timezone.utc).date().isoformat()
+
+
+def _option_expiry_date(option) -> date | None:
+    try:
+        return datetime.fromisoformat(option.expiration).date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _active_option_snapshots(snapshot: MarketSnapshot) -> list:
+    today = datetime.now(timezone.utc).date()
+    active: list = []
+    for item in snapshot.option_snapshots:
+        expiry = _option_expiry_date(item)
+        if expiry is None or expiry >= today:
+            active.append(item)
+    return active
 
 
 def _approximate_candidate(
     idea: TradeIdea, strategy: Strategy, snapshot: MarketSnapshot
-) -> CandidatePosition:
-    call = _pick_option(snapshot, "call")
-    put = _pick_option(snapshot, "put")
+) -> CandidatePosition | None:
+    call = _pick_option(
+        snapshot,
+        "call",
+        delta_range=strategy.filters.delta_range,
+        dte_range=strategy.filters.dte_range,
+    )
+    put = _pick_option(
+        snapshot,
+        "put",
+        delta_range=strategy.filters.delta_range,
+        dte_range=strategy.filters.dte_range,
+    )
     strategy_type = strategy.structure.value
     credit = idea.credit_target
     bpr = snapshot.underlying_price * 100 * 0.18
     greeks = Greeks()
     legs: list[OptionLeg] = []
 
-    if strategy_type == StrategyType.SHORT_PUT.value and put:
+    if strategy_type == StrategyType.SHORT_PUT.value:
+        if not put:
+            return None
         credit = credit or put.mid
         greeks = replace(put.greeks)
         bpr = max(snapshot.underlying_price * 100 * 0.12, credit * 100 * 5)
@@ -639,7 +718,18 @@ def _approximate_candidate(
                 side="sell",
             )
         ]
-    elif strategy_type == StrategyType.SHORT_STRANGLE.value and call and put:
+    elif strategy_type == StrategyType.SHORT_STRANGLE.value:
+        if not put:
+            return None
+        call = _pick_option(
+            snapshot,
+            "call",
+            delta_range=strategy.filters.delta_range,
+            dte_range=strategy.filters.dte_range,
+            expiration=put.expiration,
+        )
+        if not call:
+            return None
         credit = credit or (call.mid + put.mid)
         greeks = Greeks(
             delta=call.greeks.delta + put.greeks.delta,
@@ -683,60 +773,72 @@ def _approximate_candidate(
         )
         greeks = source_greeks * 0.6
         bpr = max((strategy.filters.spread_width or 5.0) * 100, credit * 100 * 2)
-        if base:
-            width = strategy.filters.spread_width or 5.0
-            buy_strike = (
-                base.strike - width
-                if base.option_type == "put"
-                else base.strike + width
+        if not base:
+            return None
+        width = strategy.filters.spread_width or 5.0
+        buy_strike = (
+            base.strike - width if base.option_type == "put" else base.strike + width
+        )
+        legs = [
+            OptionLeg(
+                idea.underlying,
+                idea.expiration or base.expiration,
+                base.strike,
+                base.option_type,
+                "sell",
+            ),
+            OptionLeg(
+                idea.underlying,
+                idea.expiration or base.expiration,
+                buy_strike,
+                base.option_type,
+                "buy",
+            ),
+        ]
+        if other_type:
+            call = _pick_option(
+                snapshot,
+                "call",
+                delta_range=strategy.filters.delta_range,
+                dte_range=strategy.filters.dte_range,
+                expiration=base.expiration,
             )
-            legs = [
-                OptionLeg(
-                    idea.underlying,
-                    idea.expiration or base.expiration,
-                    base.strike,
-                    base.option_type,
-                    "sell",
-                ),
-                OptionLeg(
-                    idea.underlying,
-                    idea.expiration or base.expiration,
-                    buy_strike,
-                    base.option_type,
-                    "buy",
-                ),
-            ]
-            if other_type and call:
-                width = strategy.filters.spread_width or 5.0
-                legs.extend(
-                    [
-                        OptionLeg(
-                            idea.underlying,
-                            idea.expiration or call.expiration,
-                            call.strike,
-                            "call",
-                            "sell",
-                        ),
-                        OptionLeg(
-                            idea.underlying,
-                            idea.expiration or call.expiration,
-                            call.strike + width,
-                            "call",
-                            "buy",
-                        ),
-                    ]
-                )
+            if not call:
+                return None
+            width = strategy.filters.spread_width or 5.0
+            legs.extend(
+                [
+                    OptionLeg(
+                        idea.underlying,
+                        idea.expiration or call.expiration,
+                        call.strike,
+                        "call",
+                        "sell",
+                    ),
+                    OptionLeg(
+                        idea.underlying,
+                        idea.expiration or call.expiration,
+                        call.strike + width,
+                        "call",
+                        "buy",
+                    ),
+                ]
+            )
     else:
         credit = credit or 1.0
         greeks = Greeks(delta=0.0, gamma=0.05, theta=0.06, vega=0.04)
         bpr = max(snapshot.underlying_price * 100 * 0.1, 250.0)
+
+    candidate_expiration = idea.expiration or (
+        legs[0].expiration if legs else _default_expiration(snapshot)
+    )
 
     return CandidatePosition(
         idea_id=idea.id,
         strategy_id=strategy.id,
         underlying=idea.underlying,
         strategy_type=strategy_type,
-        expiration=idea.expiration or _default_expiration(snapshot),
+        expiration=candidate_expiration,
         estimated_credit=round(credit, 4),
         estimated_bpr=round(bpr, 2),
         estimated_greeks=greeks,
@@ -751,7 +853,7 @@ def _approximate_candidate(
 def validate_trade_ideas(
     ideas: list[TradeIdea],
     strategies: list[Strategy],
-    provider: FixtureMarketDataProvider,
+    provider: MarketDataProvider,
     policy: RegimePolicy,
     regime: MarketRegime | None = None,
 ) -> tuple[list[CandidatePosition], list[str]]:
@@ -837,7 +939,13 @@ def validate_trade_ideas(
             notes.append(
                 f"{idea.id}: {strategy.structure.value} down-ranked by regime policy"
             )
-        candidates.append(_approximate_candidate(idea, strategy, snapshot))
+        candidate = _approximate_candidate(idea, strategy, snapshot)
+        if candidate is None:
+            notes.append(
+                f"{idea.id}: no active option snapshots available for {strategy.id}"
+            )
+            continue
+        candidates.append(candidate)
 
     return candidates, notes
 
@@ -1157,7 +1265,7 @@ def _todays_regime_override(config: dict):
 def build_trade_plan(
     store: StorageBackend,
     config: dict,
-    provider: FixtureMarketDataProvider,
+    provider: MarketDataProvider,
 ) -> TradePlan:
     strategies, approval_notes = _filter_strategies_for_execution(
         _load_runtime_strategies(config), config
@@ -1242,7 +1350,7 @@ def main() -> None:
         .get("fixtures", {})
         .get("bundle_path", "data/fixtures/fixture_bundle.json")
     )
-    provider = FixtureMarketDataProvider(bundle_path)
+    provider = build_market_data_provider(config, bundle_path)
     plan = build_trade_plan(store, config, provider)
     store.save_trade_plan(plan)
     logger.info(

@@ -46,6 +46,16 @@ def _extract_underlying(symbol: str) -> str:
     return match.group(1).upper()
 
 
+def _extract_expiration_from_option_symbol(symbol: str, fallback: str) -> str:
+    match = re.search(r"(\d{6})[CP]\d+$", symbol or "")
+    if not match:
+        return fallback
+    try:
+        return datetime.strptime(match.group(1), "%y%m%d").date().isoformat()
+    except ValueError:
+        return fallback
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -57,8 +67,14 @@ def _build_option_snapshots(row: sqlite3.Row) -> list[OptionSnapshot]:
     timestamp = row["timestamp"]
     symbol = row["symbol"]
     underlying_price = _safe_float(row["stock_price"])
-    expiration = (
+    fallback_expiration = (
         datetime.fromisoformat(timestamp.replace("Z", "+00:00")).date().isoformat()
+    )
+    call_expiration = _extract_expiration_from_option_symbol(
+        row["call_symbol"], fallback_expiration
+    )
+    put_expiration = _extract_expiration_from_option_symbol(
+        row["put_symbol"], fallback_expiration
     )
 
     call = OptionSnapshot(
@@ -66,7 +82,7 @@ def _build_option_snapshots(row: sqlite3.Row) -> list[OptionSnapshot]:
         timestamp=timestamp,
         option_type="call",
         strike=_safe_float(row["call_strike"], underlying_price),
-        expiration=expiration,
+        expiration=call_expiration,
         bid=_safe_float(row["call_bid"]),
         ask=_safe_float(row["call_ask"]),
         last=_safe_float(row["call_last"]),
@@ -85,7 +101,7 @@ def _build_option_snapshots(row: sqlite3.Row) -> list[OptionSnapshot]:
         timestamp=timestamp,
         option_type="put",
         strike=_safe_float(row["put_strike"], underlying_price),
-        expiration=expiration,
+        expiration=put_expiration,
         bid=_safe_float(row["put_bid"]),
         ask=_safe_float(row["put_ask"]),
         last=_safe_float(row["put_last"]),

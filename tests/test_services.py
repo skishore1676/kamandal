@@ -96,6 +96,25 @@ def test_shadow_nlv_override_applies_to_zero_snapshot(tmp_path):
     assert adjusted.gamma_theta_ratio == 0.0
 
 
+def test_shadow_nlv_override_applies_to_small_shadow_snapshot(tmp_path):
+    from vol_crush.optimizer.service import _apply_shadow_nlv_override
+
+    config = _sample_config(tmp_path)
+    config["execution"] = {"mode": "shadow", "shadow_net_liquidation_value": 100000.0}
+    snapshot = PortfolioSnapshot(
+        timestamp="2026-04-02T14:00:00+00:00",
+        net_liquidation_value=2000.0,
+        greeks=Greeks(theta=120.0, gamma=6.0),
+        bpr_used=15000.0,
+    )
+
+    adjusted = _apply_shadow_nlv_override(snapshot, config)
+
+    assert adjusted.net_liquidation_value == 100000.0
+    assert adjusted.bpr_used_pct == 15.0
+    assert adjusted.theta_as_pct_nlv == 0.12
+
+
 def test_resolve_regime_uses_sheet_override(tmp_path):
     from vol_crush.optimizer.service import _resolve_regime
 
@@ -268,6 +287,187 @@ def test_optimizer_builds_executable_trade_plan(tmp_path, monkeypatch):
     assert plan.decision == PlanDecision.EXECUTE
     assert plan.selected_combo_ids == ["idea_spy_put"]
     assert plan.ranked_combos
+
+
+def test_optimizer_prefers_option_near_target_delta(tmp_path, monkeypatch):
+    config = _sample_config(tmp_path)
+    store = LocalStore(
+        sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit"
+    )
+    store.save_trade_ideas(
+        [
+            TradeIdea(
+                id="idea_spy_put",
+                date="2026-04-02",
+                trader_name="Tom",
+                show_name="Bootstrappers",
+                underlying="SPY",
+                strategy_type="short_put",
+                description="Short SPY put",
+                status=IdeaStatus.NEW.value,
+            )
+        ]
+    )
+    store.save_portfolio_snapshot(
+        PortfolioSnapshot(
+            timestamp="2026-04-02T14:00:00+00:00",
+            net_liquidation_value=100000.0,
+            greeks=Greeks(delta=0.1, gamma=0.01, theta=30.0, vega=5.0),
+            beta_weighted_delta=0.1,
+            bpr_used=10000.0,
+            bpr_used_pct=10.0,
+            theta_as_pct_nlv=0.03,
+            gamma_theta_ratio=0.0003,
+            position_count=1,
+        )
+    )
+    payload = __import__("json").loads(_sample_bundle(tmp_path).read_text())
+    payload["market_snapshots"][0]["option_snapshots"] = [
+        {
+            "underlying": "SPY",
+            "timestamp": "2026-04-02T14:00:00+00:00",
+            "option_type": "put",
+            "strike": 505.0,
+            "expiration": "2026-05-15",
+            "bid": 5.0,
+            "ask": 5.2,
+            "last": 5.1,
+            "greeks": {"delta": -0.35, "gamma": 0.03, "theta": 0.10, "vega": 0.12},
+            "implied_volatility": 26.0,
+            "gds_score": 0.08,
+            "source": "test",
+            "quality_flags": [],
+        },
+        {
+            "underlying": "SPY",
+            "timestamp": "2026-04-02T14:00:00+00:00",
+            "option_type": "put",
+            "strike": 500.0,
+            "expiration": "2026-05-15",
+            "bid": 2.0,
+            "ask": 2.2,
+            "last": 2.1,
+            "greeks": {"delta": -0.16, "gamma": 0.025, "theta": 0.09, "vega": 0.10},
+            "implied_volatility": 26.0,
+            "gds_score": 0.08,
+            "source": "test",
+            "quality_flags": [],
+        },
+        {
+            "underlying": "SPY",
+            "timestamp": "2026-04-02T14:00:00+00:00",
+            "option_type": "call",
+            "strike": 540.0,
+            "expiration": "2026-05-15",
+            "bid": 1.9,
+            "ask": 2.1,
+            "last": 2.0,
+            "greeks": {"delta": 0.16, "gamma": 0.02, "theta": 0.08, "vega": 0.11},
+            "implied_volatility": 24.0,
+            "gds_score": 0.1,
+            "source": "test",
+            "quality_flags": [],
+        },
+    ]
+    bundle_path = tmp_path / "delta_target_bundle.json"
+    bundle_path.write_text(__import__("json").dumps(payload), encoding="utf-8")
+    provider = FixtureMarketDataProvider(bundle_path)
+    strategies = [
+        Strategy.from_dict(
+            {
+                "id": "spy_put",
+                "name": "SPY Short Put",
+                "structure": "short_put",
+                "filters": {
+                    "underlyings": ["SPY"],
+                    "dte_range": [30, 45],
+                    "delta_range": [0.14, 0.2],
+                },
+                "management": {"profit_target_pct": 50},
+                "allocation": {
+                    "max_bpr_pct": 30,
+                    "max_per_position_pct": 10,
+                    "max_positions": 5,
+                },
+            }
+        )
+    ]
+    monkeypatch.setattr(
+        "vol_crush.optimizer.service.load_strategy_objects", lambda: strategies
+    )
+
+    plan = build_trade_plan(store, config, provider)
+
+    assert plan.decision == PlanDecision.EXECUTE
+    assert plan.candidate_positions[0].legs[0].strike == 500.0
+
+
+def test_optimizer_rejects_expired_option_snapshots(tmp_path, monkeypatch):
+    config = _sample_config(tmp_path)
+    store = LocalStore(
+        sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit"
+    )
+    store.save_trade_ideas(
+        [
+            TradeIdea(
+                id="idea_spy_put",
+                date="2026-04-02",
+                trader_name="Tom",
+                show_name="Bootstrappers",
+                underlying="SPY",
+                strategy_type="short_put",
+                description="Short SPY put",
+                status=IdeaStatus.NEW.value,
+            )
+        ]
+    )
+    store.save_portfolio_snapshot(
+        PortfolioSnapshot(
+            timestamp="2026-04-02T14:00:00+00:00",
+            net_liquidation_value=100000.0,
+            greeks=Greeks(delta=0.1, gamma=0.01, theta=30.0, vega=5.0),
+            beta_weighted_delta=0.1,
+            bpr_used=10000.0,
+            bpr_used_pct=10.0,
+            theta_as_pct_nlv=0.03,
+            gamma_theta_ratio=0.0003,
+            position_count=1,
+        )
+    )
+    payload = __import__("json").loads(_sample_bundle(tmp_path).read_text())
+    payload["market_snapshots"][0]["option_snapshots"][0]["expiration"] = "2020-01-17"
+    payload["market_snapshots"][0]["option_snapshots"][1]["expiration"] = "2020-01-17"
+    bundle_path = tmp_path / "expired_fixture_bundle.json"
+    bundle_path.write_text(__import__("json").dumps(payload), encoding="utf-8")
+    provider = FixtureMarketDataProvider(bundle_path)
+    strategies = [
+        Strategy.from_dict(
+            {
+                "id": "spy_put",
+                "name": "SPY Short Put",
+                "structure": "short_put",
+                "filters": {
+                    "underlyings": ["SPY"],
+                    "dte_range": [30, 45],
+                    "delta_range": [0.14, 0.2],
+                },
+                "management": {"profit_target_pct": 50},
+                "allocation": {
+                    "max_bpr_pct": 30,
+                    "max_per_position_pct": 10,
+                    "max_positions": 5,
+                },
+            }
+        )
+    ]
+    monkeypatch.setattr(
+        "vol_crush.optimizer.service.load_strategy_objects", lambda: strategies
+    )
+
+    plan = build_trade_plan(store, config, provider)
+
+    assert plan.decision == PlanDecision.NO_TRADE
+    assert "no active option snapshots available" in " ".join(plan.risk_flags)
 
 
 def test_optimizer_returns_no_trade_without_matching_strategy(tmp_path, monkeypatch):
