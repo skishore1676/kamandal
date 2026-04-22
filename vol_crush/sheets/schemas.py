@@ -233,6 +233,20 @@ _IDEA_ALIASES = {
 }
 
 
+_OPERATOR_DIGEST_ALIASES = {
+    "date": "date",
+    "category": "category",
+    "title": "title",
+    "source": "source",
+    "summary": "summary",
+    "actionable_ideas_present": "actionable_ideas_present",
+    "source_url": "source_url",
+    "url": "source_url",
+    "operator_notes": "operator_notes",
+    "digest_id": "digest_id",
+}
+
+
 @dataclass
 class IdeaReviewRow:
     """One human or LLM-entered trade idea awaiting approval."""
@@ -346,6 +360,79 @@ class IdeaReviewRow:
             self.proposed_strategy or self.strategy_type,
             self.note or self.description,
         )
+
+
+@dataclass
+class OperatorDigestRow:
+    """Brief operator-facing context row, kept separate from execution ideas."""
+
+    HEADER: Sequence[str] = field(
+        default=(
+            "date",
+            "category",
+            "title",
+            "source",
+            "summary",
+            "actionable_ideas_present",
+            "source_url",
+            "operator_notes",
+            "digest_id",
+        ),
+        repr=False,
+    )
+
+    digest_id: str = ""
+    date: str = ""
+    category: str = ""
+    title: str = ""
+    source: str = ""
+    summary: str = ""
+    actionable_ideas_present: bool = False
+    source_url: str = ""
+    operator_notes: str = ""
+
+    @classmethod
+    def from_row(cls, raw: Mapping[str, Any]) -> "OperatorDigestRow":
+        normalized: dict[str, Any] = {}
+        for key, value in raw.items():
+            canonical = _OPERATOR_DIGEST_ALIASES.get(str(key).strip().lower())
+            if canonical:
+                normalized[canonical] = value
+        row = cls(
+            digest_id=str(normalized.get("digest_id") or "").strip(),
+            date=str(normalized.get("date") or "").strip(),
+            category=str(normalized.get("category") or "").strip().lower(),
+            title=str(normalized.get("title") or "").strip(),
+            source=str(normalized.get("source") or "").strip(),
+            summary=str(normalized.get("summary") or "").strip(),
+            actionable_ideas_present=coerce_bool(
+                normalized.get("actionable_ideas_present"), default=False
+            ),
+            source_url=str(normalized.get("source_url") or "").strip(),
+            operator_notes=str(normalized.get("operator_notes") or "").strip(),
+        )
+        if not row.digest_id:
+            row.digest_id = row.identity_key()
+        return row
+
+    def to_row(self) -> list[Any]:
+        return [
+            self.date,
+            self.category,
+            self.title,
+            self.source,
+            self.summary,
+            as_bool_cell(self.actionable_ideas_present),
+            self.source_url,
+            self.operator_notes,
+            self.digest_id or self.identity_key(),
+        ]
+
+    def identity_key(self) -> str:
+        if self.digest_id:
+            return self.digest_id
+        basis = f"{self.date}|{self.category}|{self.title}|{self.source_url}"
+        return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass

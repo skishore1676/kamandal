@@ -12,6 +12,9 @@ from vol_crush.core.config import load_config
 from vol_crush.core.logging import setup_logging
 from vol_crush.core.strategy_aliases import infer_expectation, operator_strategy_label
 from vol_crush.executor.service import execute_latest_plan
+from vol_crush.idea_scraper.summary_archive import (
+    read_recent_summary_records,
+)
 from vol_crush.idea_sources.fetcher import run_source_fetch
 from vol_crush.integrations.fixtures import (
     build_fixture_payload,
@@ -158,6 +161,48 @@ def _push_plan_and_positions(config: dict, store, plan, logger: logging.Logger) 
         )
 
 
+def _push_operator_digest(
+    config: dict,
+    logger: logging.Logger,
+    *,
+    lookback_days: int = 7,
+) -> None:
+    try:
+        from vol_crush.idea_sources.fetcher import _resolve_archive_roots
+        from vol_crush.sheets.schemas import OperatorDigestRow
+        from vol_crush.sheets.sync import push_operator_digest
+
+        _, summaries_root, _ = _resolve_archive_roots(config)
+        records = read_recent_summary_records(
+            summaries_root, lookback_days=lookback_days
+        )
+        rows = [
+            OperatorDigestRow(
+                digest_id=record.digest_id,
+                date=record.date,
+                category=record.category,
+                title=record.title,
+                source=record.author or record.source_name,
+                summary=record.summary or record.headline,
+                actionable_ideas_present=record.actionable_ideas_present,
+                source_url=record.url,
+            )
+            for record in records
+        ]
+        push_operator_digest(config, rows)
+        logger.info(
+            "Sheet push: operator_digest %d rows from last %dd",
+            len(rows),
+            lookback_days,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Sheet push operator_digest failed (%s: %s); continuing",
+            type(exc).__name__,
+            exc,
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Vol Crush daily dry-run pipeline")
     parser.add_argument("--config", type=Path, default=None, help="Path to config.yaml")
@@ -213,6 +258,7 @@ def main() -> None:
         # appear for review (existing approvals preserved by merge).
         _try_sheet_pull(config, logger)
         _push_recent_ideas_to_sheet(config, store, logger)
+        _push_operator_digest(config, logger)
 
     payload, replay_trades = build_fixture_payload(config)
     bundle_path, replay_path = write_fixture_artifacts(config, payload, replay_trades)

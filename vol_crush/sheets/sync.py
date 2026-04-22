@@ -25,6 +25,7 @@ from vol_crush.sheets.schemas import (
     DailyPlanRow,
     IdeaApproval,
     IdeaReviewRow,
+    OperatorDigestRow,
     PositionRow,
     ProfileConfigRow,
     RegimeControlRow,
@@ -41,6 +42,7 @@ _DEFAULT_TABS = {
     "regime_control": "regime_control",
     "profiles": "profiles",
     "universe": "universe",
+    "operator_digest": "operator_digest",
     "idea_review": "idea_review",
     "daily_plan": "daily_plan",
     "positions": "positions",
@@ -252,6 +254,11 @@ def bootstrap_sheet(config: Mapping[str, Any]) -> list[str]:
     )
     universe.set_enum_validation("enabled", ["TRUE", "FALSE"])
     notes.append("universe: header + seeded rows set")
+
+    operator_digest = client.get_worksheet(tabs["operator_digest"])
+    _ensure_model_tab(operator_digest, row_cls=OperatorDigestRow)
+    operator_digest.set_enum_validation("actionable_ideas_present", ["TRUE", "FALSE"])
+    notes.append("operator_digest: header set")
 
     # idea_review — headers + dropdown on approval.
     idea_review = client.get_worksheet(tabs["idea_review"])
@@ -781,6 +788,41 @@ def push_idea_review(
     _write_idea_review_metadata(cache_dir, metadata_rows)
     logger.info(
         "pushed idea_review: %d new/updated, %d untouched operator rows",
+        len(merged),
+        len(trailing),
+    )
+
+
+def push_operator_digest(
+    config: Mapping[str, Any], rows: Sequence[OperatorDigestRow]
+) -> None:
+    """Publish the operator digest while preserving operator-authored notes."""
+    tabs = _tabs(config)
+    client = GoogleSheetClient.from_config(config)
+    handle = client.get_worksheet(tabs["operator_digest"])
+    existing_raw = handle.data_rows()
+    existing_rows = [OperatorDigestRow.from_row(row) for row in existing_raw]
+    existing_by_key = {row.identity_key(): row for row in existing_rows}
+
+    merged: list[OperatorDigestRow] = []
+    seen: set[str] = set()
+    for row in rows:
+        key = row.identity_key()
+        prior = existing_by_key.get(key)
+        if prior is not None:
+            row.operator_notes = prior.operator_notes or row.operator_notes
+        merged.append(row)
+        seen.add(key)
+
+    trailing = [
+        row
+        for row in existing_rows
+        if row.identity_key() not in seen and row.operator_notes
+    ]
+    final = merged + trailing
+    handle.replace_contents(OperatorDigestRow.HEADER, [row.to_row() for row in final])
+    logger.info(
+        "pushed operator_digest: %d refreshed rows, %d preserved noted rows",
         len(merged),
         len(trailing),
     )

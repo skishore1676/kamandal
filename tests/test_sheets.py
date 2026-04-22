@@ -13,6 +13,7 @@ from vol_crush.sheets.schemas import (
     DailyPlanRow,
     IdeaApproval,
     IdeaReviewRow,
+    OperatorDigestRow,
     ProfileConfigRow,
     RegimeControlRow,
     StrategyApprovalRow,
@@ -138,6 +139,26 @@ def test_daily_plan_row_emits_visible_idea_id():
     assert cells[-1] == "idea_123"
     recovered = DailyPlanRow.from_row(dict(zip(DailyPlanRow.HEADER, cells)))
     assert recovered.idea_id == "idea_123"
+
+
+def test_operator_digest_row_round_trip():
+    row = OperatorDigestRow(
+        digest_id="digest_1",
+        date="2026-04-22",
+        category="macro",
+        title="Vol Update",
+        source="tastylive",
+        summary="Vol is normal and product risk differs by IV-adjusted notional.",
+        actionable_ideas_present=False,
+        source_url="https://youtube.test/watch?v=abc",
+        operator_notes="watch this again",
+    )
+    cells = row.to_row()
+    recovered = OperatorDigestRow.from_row(dict(zip(OperatorDigestRow.HEADER, cells)))
+    assert recovered.digest_id == "digest_1"
+    assert recovered.category == "macro"
+    assert recovered.actionable_ideas_present is False
+    assert recovered.operator_notes == "watch this again"
 
 
 def test_profile_and_universe_rows_round_trip():
@@ -274,6 +295,7 @@ def _fake_client_config(tmp_path: Path) -> dict:
                 "regime_control": "regime_control",
                 "profiles": "profiles",
                 "universe": "universe",
+                "operator_digest": "operator_digest",
                 "idea_review": "idea_review",
                 "daily_plan": "daily_plan",
                 "positions": "positions",
@@ -340,6 +362,7 @@ def test_bootstrap_populates_all_control_tabs(tmp_path, monkeypatch):
         "regime_control",
         "profiles",
         "universe",
+        "operator_digest",
         "idea_review",
         "daily_plan",
     ):
@@ -355,10 +378,12 @@ def test_bootstrap_populates_all_control_tabs(tmp_path, monkeypatch):
     regime_rows = spreadsheet.worksheet("regime_control").get_all_values()
     template_rows = spreadsheet.worksheet("template_library").get_all_values()
     universe_rows = spreadsheet.worksheet("universe").get_all_values()
+    digest_rows = spreadsheet.worksheet("operator_digest").get_all_values()
     assert regime_rows[0] == list(RegimeControlRow.HEADER)
     assert template_rows[0] == list(TemplateLibraryRow.HEADER)
     assert profiles_rows[0] == list(ProfileConfigRow.HEADER)
     assert universe_rows[0] == list(UniverseMemberRow.HEADER)
+    assert digest_rows[0] == list(OperatorDigestRow.HEADER)
 
 
 def test_pull_stamps_approval_metadata_and_caches(tmp_path, monkeypatch):
@@ -494,6 +519,65 @@ def test_push_idea_review_matches_legacy_row_without_visible_idea_id(tmp_path, m
     assert len(all_rows) == 2
     assert all_rows[1][1] == "approve"
     assert all_rows[1][6] == "idea_legacy_match"
+
+
+def test_push_operator_digest_preserves_operator_notes(tmp_path, monkeypatch):
+    spreadsheet = _FakeSpreadsheet("kamandal_control")
+    _install_fake_client(monkeypatch, spreadsheet)
+
+    operator_digest = spreadsheet.add_worksheet(title="operator_digest")
+    operator_digest.update(
+        range_name="A1",
+        values=[
+            list(OperatorDigestRow.HEADER),
+            [
+                "2026-04-22",
+                "macro",
+                "Vol Update",
+                "tastylive",
+                "IV compressed",
+                "FALSE",
+                "https://youtube.test/watch?v=abc",
+                "watch this again",
+                "digest_1",
+            ],
+        ],
+        value_input_option="USER_ENTERED",
+    )
+
+    from vol_crush.sheets.sync import push_operator_digest
+
+    push_operator_digest(
+        _fake_client_config(tmp_path),
+        [
+            OperatorDigestRow(
+                digest_id="digest_1",
+                date="2026-04-22",
+                category="macro",
+                title="Vol Update",
+                source="tastylive",
+                summary="Fresh summary",
+                actionable_ideas_present=False,
+                source_url="https://youtube.test/watch?v=abc",
+            ),
+            OperatorDigestRow(
+                digest_id="digest_2",
+                date="2026-04-22",
+                category="basics",
+                title="Options Basics",
+                source="projectoption",
+                summary="Call option primer",
+                actionable_ideas_present=False,
+                source_url="https://youtube.test/watch?v=def",
+            ),
+        ],
+    )
+
+    all_rows = spreadsheet.worksheet("operator_digest").get_all_values()
+    assert len(all_rows) == 3
+    assert all_rows[1][4] == "Fresh summary"
+    assert all_rows[1][7] == "watch this again"
+    assert all_rows[2][2] == "Options Basics"
 
 
 def test_pull_idea_review_restores_hidden_metadata(tmp_path, monkeypatch):

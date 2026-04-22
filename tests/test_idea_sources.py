@@ -283,7 +283,10 @@ def test_transcript_archive_write_and_purge(tmp_path):
 
 
 def test_summary_archive_writes_markdown(tmp_path):
-    from vol_crush.idea_scraper.summary_archive import write_summary
+    from vol_crush.idea_scraper.summary_archive import (
+        read_recent_summary_records,
+        write_summary,
+    )
 
     doc = RawSourceDocument(
         document_id="doc1",
@@ -313,6 +316,15 @@ def test_summary_archive_writes_markdown(tmp_path):
     assert "**SPY**" in rendered
     assert "short strangles" in rendered
     assert "Sell premium" in rendered
+
+    sidecar = path.with_suffix(".json")
+    assert sidecar.exists()
+    records = read_recent_summary_records(tmp_path, lookback_days=7)
+    assert len(records) == 1
+    assert records[0].digest_id == "abc"
+    assert records[0].category == "trade_setup"
+    assert records[0].actionable_ideas_present is True
+    assert "Short premium opportunistic" in records[0].summary
 
 
 def test_fetch_url_retries_then_succeeds(monkeypatch):
