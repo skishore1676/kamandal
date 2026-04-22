@@ -8,6 +8,8 @@ from vol_crush.core.models import (
     Greeks,
     IdeaStatus,
     MarketRegime,
+    OptionLeg,
+    OrderStatus,
     PendingOrder,
     PlanDecision,
     PortfolioSnapshot,
@@ -20,6 +22,7 @@ from vol_crush.core.models import (
 )
 from vol_crush.executor.service import (
     _latest_trade_plan,
+    _reconcile_shadow_open_orders,
     _sheet_plan_approved,
     create_pending_orders,
 )
@@ -723,6 +726,94 @@ def test_pending_executor_caps_live_quantity_to_one_by_default(tmp_path):
 
     assert orders[0].quantity == 1
     assert orders[0].estimated_bpr == 850.0
+
+
+def test_shadow_order_reconcile_skips_identical_active_duplicate() -> None:
+    existing = PendingOrder(
+        pending_order_id="pending_existing",
+        plan_id="plan_old",
+        idea_id="idea_1",
+        created_at="2026-04-21T13:05:15+00:00",
+        action=TradeAction.OPEN,
+        status=OrderStatus.PENDING.value,
+        underlying="QQQ",
+        strategy_id="short_put_conservative:index_etf",
+        quantity=1,
+        target_price=0.5,
+        estimated_credit=0.5,
+        estimated_bpr=7000.0,
+        greeks_impact=Greeks(theta=-0.4),
+        legs=[OptionLeg("QQQ", "2026-05-29", 605.0, "put", "sell", 1)],
+        execution_mode="shadow",
+        broker_status="PREFLIGHT_OK",
+    )
+    new = PendingOrder(
+        pending_order_id="pending_new",
+        plan_id="plan_new",
+        idea_id="idea_1",
+        created_at="2026-04-21T13:09:38+00:00",
+        action=TradeAction.OPEN,
+        status=OrderStatus.PENDING.value,
+        underlying="QQQ",
+        strategy_id="short_put_conservative:index_etf",
+        quantity=1,
+        target_price=0.5,
+        estimated_credit=0.5,
+        estimated_bpr=7000.0,
+        greeks_impact=Greeks(theta=-0.4),
+        legs=[OptionLeg("QQQ", "2026-05-29", 605.0, "put", "sell", 1)],
+    )
+
+    orders, superseded = _reconcile_shadow_open_orders([existing], [new])
+
+    assert orders == []
+    assert superseded == []
+
+
+def test_shadow_order_reconcile_supersedes_older_same_thesis() -> None:
+    existing = PendingOrder(
+        pending_order_id="pending_existing",
+        plan_id="plan_old",
+        idea_id="idea_1",
+        created_at="2026-04-21T13:05:15+00:00",
+        action=TradeAction.OPEN,
+        status=OrderStatus.PENDING.value,
+        underlying="QQQ",
+        strategy_id="short_put_conservative:index_etf",
+        quantity=1,
+        target_price=0.5,
+        estimated_credit=0.5,
+        estimated_bpr=7000.0,
+        greeks_impact=Greeks(theta=-0.4),
+        legs=[OptionLeg("QQQ", "2026-05-29", 605.0, "put", "sell", 1)],
+        execution_mode="shadow",
+        broker_status="PREFLIGHT_OK",
+    )
+    new = PendingOrder(
+        pending_order_id="pending_new",
+        plan_id="plan_new",
+        idea_id="idea_1",
+        created_at="2026-04-21T13:40:21+00:00",
+        action=TradeAction.OPEN,
+        status=OrderStatus.PENDING.value,
+        underlying="QQQ",
+        strategy_id="short_put_conservative:index_etf",
+        quantity=1,
+        target_price=0.52,
+        estimated_credit=0.52,
+        estimated_bpr=7100.0,
+        greeks_impact=Greeks(theta=-0.41),
+        legs=[OptionLeg("QQQ", "2026-05-29", 604.0, "put", "sell", 1)],
+    )
+
+    orders, superseded = _reconcile_shadow_open_orders([existing], [new])
+
+    assert orders == [new]
+    assert len(superseded) == 1
+    assert superseded[0].pending_order_id == "pending_existing"
+    assert superseded[0].status == OrderStatus.CANCELLED.value
+    assert superseded[0].broker_status == "SUPERSEDED"
+    assert "pending_new" in superseded[0].notes
 
 
 def test_latest_trade_plan_uses_created_at_not_random_id() -> None:

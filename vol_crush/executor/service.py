@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import uuid
+from collections.abc import Iterable
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,12 +24,109 @@ from vol_crush.integrations.public_broker import PublicBrokerAdapter
 from vol_crush.integrations.storage import build_local_store
 from vol_crush.optimizer.service import (
     _apply_shadow_nlv_override,
+    _execution_mode,
     _project_portfolio,
     evaluate_constraints,
 )
 from vol_crush.portfolio_sync.service import sync_public_portfolio
 
 logger = logging.getLogger("vol_crush.executor")
+
+
+def _normalized_leg_signature(order: PendingOrder) -> tuple[tuple[str, str, float, str, str, int], ...]:
+    legs = []
+    for leg in order.legs:
+        legs.append(
+            (
+                str(leg.underlying or "").upper(),
+                str(leg.expiration or ""),
+                round(float(leg.strike), 3),
+                str(leg.option_type or "").lower(),
+                str(leg.side or "").lower(),
+                int(leg.quantity or 1),
+            )
+        )
+    return tuple(sorted(legs))
+
+
+def _order_signature(order: PendingOrder) -> tuple:
+    action = order.action.value if hasattr(order.action, "value") else str(order.action)
+    return (
+        action,
+        str(order.underlying or "").upper(),
+        str(order.strategy_id or ""),
+        int(order.quantity or 0),
+        _normalized_leg_signature(order),
+    )
+
+
+def _is_active_open_order(order: PendingOrder) -> bool:
+    action = order.action.value if hasattr(order.action, "value") else str(order.action)
+    return action == TradeAction.OPEN.value and order.status in {
+        OrderStatus.PENDING.value,
+        OrderStatus.WORKING.value,
+    }
+
+
+def _same_shadow_thesis(existing: PendingOrder, new: PendingOrder) -> bool:
+    if not (_is_active_open_order(existing) and _is_active_open_order(new)):
+        return False
+    if str(existing.underlying or "").upper() != str(new.underlying or "").upper():
+        return False
+    if str(existing.strategy_id or "") != str(new.strategy_id or ""):
+        return False
+    if existing.idea_id and new.idea_id:
+        return existing.idea_id == new.idea_id
+    return _normalized_leg_signature(existing) == _normalized_leg_signature(new)
+
+
+def _reconcile_shadow_open_orders(
+    existing_orders: Iterable[PendingOrder],
+    new_orders: list[PendingOrder],
+) -> tuple[list[PendingOrder], list[PendingOrder]]:
+    filtered: list[PendingOrder] = []
+    updates: dict[str, PendingOrder] = {}
+    active_existing = [order for order in existing_orders if _is_active_open_order(order)]
+
+    for new_order in new_orders:
+        duplicate = next(
+            (
+                order
+                for order in active_existing
+                if _order_signature(order) == _order_signature(new_order)
+            ),
+            None,
+        )
+        if duplicate is not None:
+            logger.info(
+                "Skipping duplicate shadow order %s; active order %s already covers it.",
+                new_order.pending_order_id,
+                duplicate.pending_order_id,
+            )
+            continue
+
+        for existing in active_existing:
+            if existing.pending_order_id in updates:
+                continue
+            if not _same_shadow_thesis(existing, new_order):
+                continue
+            existing.status = OrderStatus.CANCELLED.value
+            existing.broker_status = "SUPERSEDED"
+            existing.notes = (
+                f"{existing.notes} Superseded by {new_order.pending_order_id} from "
+                f"{new_order.plan_id}."
+            ).strip()
+            updates[existing.pending_order_id] = existing
+            logger.info(
+                "Superseding shadow order %s with %s for %s.",
+                existing.pending_order_id,
+                new_order.pending_order_id,
+                new_order.underlying,
+            )
+
+        filtered.append(new_order)
+
+    return filtered, list(updates.values())
 
 
 def _sized_quantity(candidate, portfolio: PortfolioSnapshot, config: dict) -> int:
@@ -179,6 +277,17 @@ def execute_latest_plan(config: dict) -> list[PendingOrder]:
     )
     snapshot = _apply_shadow_nlv_override(snapshot, config)
     orders = create_pending_orders(latest, snapshot, config)
+    superseded_orders: list[PendingOrder] = []
+    if _execution_mode(dict(config)) == "shadow" and orders:
+        orders, superseded_orders = _reconcile_shadow_open_orders(
+            store.list_pending_orders(), orders
+        )
+        if superseded_orders:
+            store.save_pending_orders(superseded_orders)
+            logger.info(
+                "Superseded %d older shadow orders before submission.",
+                len(superseded_orders),
+            )
     if orders:
         store.save_pending_orders(orders)
         if config.get("broker", {}).get("active") == "public":
