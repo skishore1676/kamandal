@@ -75,6 +75,9 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
         "llm.api_key": os.environ.get("VOL_CRUSH_LLM_API_KEY")
         or os.environ.get("OPENROUTER_API_KEY"),
         "llm.base_url": os.environ.get("VOL_CRUSH_LLM_BASE_URL"),
+        "llm.codex_binary": os.environ.get("VOL_CRUSH_CODEX_BINARY"),
+        "llm.codex_workdir": os.environ.get("VOL_CRUSH_CODEX_WORKDIR"),
+        "llm.codex_timeout_seconds": _env_int("VOL_CRUSH_CODEX_TIMEOUT_SECONDS"),
         "openai.api_key": os.environ.get("VOL_CRUSH_OPENAI_API_KEY"),
         "broker.tastytrade.username": os.environ.get("VOL_CRUSH_TT_USERNAME"),
         "broker.tastytrade.password": os.environ.get("VOL_CRUSH_TT_PASSWORD"),

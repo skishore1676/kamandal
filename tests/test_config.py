@@ -80,6 +80,18 @@ def test_load_config_constraint_envs(monkeypatch):
     assert config["portfolio"]["constraints"]["max_single_underlying_pct"] == 60.0
 
 
+def test_load_config_codex_cli_envs(monkeypatch):
+    monkeypatch.setenv("VOL_CRUSH_LLM_PROVIDER", "codex_cli")
+    monkeypatch.setenv("VOL_CRUSH_CODEX_BINARY", "/tmp/codex")
+    monkeypatch.setenv("VOL_CRUSH_CODEX_WORKDIR", "/tmp")
+    monkeypatch.setenv("VOL_CRUSH_CODEX_TIMEOUT_SECONDS", "123")
+    config = load_config(get_project_root() / "config" / "config.example.yaml")
+    assert config["llm"]["provider"] == "codex_cli"
+    assert config["llm"]["codex_binary"] == "/tmp/codex"
+    assert config["llm"]["codex_workdir"] == "/tmp"
+    assert config["llm"]["codex_timeout_seconds"] == 123
+
+
 def test_set_nested():
     """_set_nested should set deeply nested keys."""
     d = {}

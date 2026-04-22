@@ -35,17 +35,21 @@ broker:
     sync_portfolio_after_submission: true
 
 # LLM (idea extraction, strategy mining, refinement)
-# provider: openai | openrouter
+# provider: openai | openrouter | codex_cli
 # For OpenRouter, model must be prefixed:
 #   anthropic/claude-sonnet-4.5, anthropic/claude-haiku-4.5,
 #   openai/gpt-4o, google/gemini-2.5-pro, ...
 # See https://openrouter.ai/models
+# For Codex CLI, model can be a Codex-supported model like `gpt-5.4`.
 llm:
   provider: openai
   api_key: ""
   model: gpt-4o
   fallback_model: ""   # used if primary model raises (rate limit, 5xx, model-not-found)
   base_url: ""   # optional; auto-set to OpenRouter when provider=openrouter
+  codex_binary: ""   # optional path to `codex`; auto-discovered if empty
+  codex_workdir: ""  # optional working dir for `codex exec`; defaults to repo root
+  codex_timeout_seconds: 300
 
 # OpenAI (Whisper audio transcription — still required for idea_scraper live/record modes)
 # Also used as fallback for `llm` when llm.api_key is empty and llm.provider=openai.
