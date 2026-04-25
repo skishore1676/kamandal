@@ -829,6 +829,24 @@ def test_load_strategy_objects_prefers_sheet_runtime_controls(tmp_path):
     assert short_put_idx[0].allocation.max_positions == 6
 
 
+def test_load_strategy_objects_treats_existing_empty_sheet_cache_as_authoritative(
+    tmp_path,
+):
+    from vol_crush.optimizer.service import load_strategy_objects
+
+    cache_dir = tmp_path / "sheet_cache"
+    cache_dir.mkdir()
+    (cache_dir / "strategies.json").write_text(json.dumps({"rows": []}))
+    config = {
+        "google_sheets": {
+            "enabled": True,
+            "cache_dir": str(cache_dir),
+        }
+    }
+
+    assert load_strategy_objects(config) == []
+
+
 # ── Optimizer gate integration ───────────────────────────────────────
 
 

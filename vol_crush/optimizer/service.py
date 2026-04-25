@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from vol_crush.core.config import (
+    get_data_dir,
     load_config,
     load_strategies,
     load_strategy_templates,
@@ -235,17 +236,26 @@ def _find_template_for_sheet_strategy(
     return None
 
 
+def _sheet_strategy_cache_exists(config: dict) -> bool:
+    if not (config.get("google_sheets") or {}).get("enabled", False):
+        return False
+    raw_cache_dir = (config.get("google_sheets") or {}).get("cache_dir")
+    cache_dir = Path(raw_cache_dir) if raw_cache_dir else get_data_dir() / "sheet_cache"
+    return (cache_dir / "strategies.json").exists()
+
+
 def _sheet_strategy_objects(
     config: dict,
     templates: list[StrategyTemplate],
     profiles: list[UnderlyingProfile],
-) -> list[Strategy]:
+) -> tuple[bool, list[Strategy]]:
     if not (config.get("google_sheets") or {}).get("enabled", False):
-        return []
+        return False, []
+    cache_exists = _sheet_strategy_cache_exists(config)
     try:
         from vol_crush.sheets.sync import read_approvals_cache
     except ImportError:
-        return []
+        return cache_exists, []
 
     rows = [
         row
@@ -253,7 +263,7 @@ def _sheet_strategy_objects(
         if row.strategy_id and row.stock_profile
     ]
     if not rows:
-        return []
+        return cache_exists, []
 
     profiles_by_id = {profile.profile_id: profile for profile in profiles}
     resolved: dict[str, Strategy] = {}
@@ -264,7 +274,7 @@ def _sheet_strategy_objects(
             continue
         strategy = resolve_strategy(template, profile)
         resolved[strategy.id] = strategy
-    return list(resolved.values())
+    return cache_exists, list(resolved.values())
 
 
 def load_strategy_objects(
@@ -281,8 +291,10 @@ def load_strategy_objects(
     if config is not None:
         templates = _sheet_template_overrides(dict(config), templates)
         profiles = _sheet_profile_overrides(dict(config), profiles)
-        sheet_resolved = _sheet_strategy_objects(dict(config), templates, profiles)
-        if sheet_resolved:
+        sheet_cache_exists, sheet_resolved = _sheet_strategy_objects(
+            dict(config), templates, profiles
+        )
+        if sheet_cache_exists:
             return sheet_resolved
     resolved = resolve_all_strategies(templates, profiles)
     if resolved:
