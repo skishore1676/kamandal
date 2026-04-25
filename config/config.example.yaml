@@ -10,9 +10,10 @@ storage:
     sqlite_path: data/kamandal.db
     audit_dir: data/audit
 
-# Broker API (execution integration TBD; current candidates include tastytrade, Public, and Schwab)
+# Broker API. Public is the only implemented live adapter right now; the
+# tastytrade/schwab sections are placeholders for future adapters.
 broker:
-  active: tastytrade  # tastytrade | public | schwab
+  active: public  # public | tastytrade | schwab
 
   tastytrade:
     username: ""
@@ -58,13 +59,13 @@ openai:
   model: gpt-4o
   whisper_model: whisper-1
 
-# Google Sheets — human-facing control + reporting plane. Reuses bhiksha's
-# service account (configure via env: GOOGLE_API_CREDENTIALS_PATH +
-# KAMANDAL_SHEET_ID). Bootstrap tabs with `python -m vol_crush.sheets_sync bootstrap`.
+# Google Sheets — human-facing control + reporting plane.
+# Configure via env: GOOGLE_API_CREDENTIALS_PATH + KAMANDAL_SHEET_ID.
+# Bootstrap tabs with `python -m vol_crush.sheets bootstrap`.
 google_sheets:
   credentials_file: ""                  # overridden by GOOGLE_API_CREDENTIALS_PATH
   spreadsheet_id: ""                    # overridden by KAMANDAL_SHEET_ID
-  enabled: true                         # overridden by ENABLE_SHEETS_SYNC
+  enabled: false                        # overridden by ENABLE_SHEETS_SYNC
   cache_dir: data/sheet_cache           # local JSON mirror used between syncs
   tabs:
     strategies: strategies              # READ: strategy approval control plane
@@ -104,6 +105,9 @@ portfolio:
     min_positions: 3                          # diversification floor
     max_positions: 15                         # complexity cap
 
+  # Regime policy is engine behavior, not today's operator opinion. The Sheet
+  # `regime_control` tab can override which regime is active today; these
+  # defaults define what each regime means if Sheets is unavailable.
   regimes:
     high_iv:
       prefer_structures: [short_strangle, short_put, iron_condor]
