@@ -20,8 +20,10 @@ from vol_crush.core.models import (
 from vol_crush.integrations.fixtures import (
     FixtureMarketDataProvider,
     build_fixture_payload,
+    _fixture_seed_symbols,
     write_fixture_artifacts,
 )
+from vol_crush.sheets.schemas import UniverseMemberRow
 from vol_crush.integrations.storage import LocalStore
 
 
@@ -344,3 +346,22 @@ def test_fixture_builder_adds_synthetic_options_for_public_seed(tmp_path, monkey
         "put",
     }
     assert snapshot["option_snapshots"][0]["source"] == "synthetic_public_seed"
+
+
+def test_fixture_seed_symbols_prefer_enabled_sheet_universe(monkeypatch):
+    from vol_crush.sheets import sync
+
+    monkeypatch.setattr(
+        sync,
+        "read_universe_cache",
+        lambda config: [
+            UniverseMemberRow(symbol="SPY", stock_profile="index_etf", enabled=True),
+            UniverseMemberRow(symbol="SPY", stock_profile="large_stocks", enabled=True),
+            UniverseMemberRow(symbol="QQQ", stock_profile="index_etf", enabled=False),
+            UniverseMemberRow(symbol="DIA", stock_profile="index_etf", enabled=True),
+        ],
+    )
+    config = {"google_sheets": {"enabled": True}}
+    fixture_cfg = {"public_seed_symbols": ["HOOD"]}
+
+    assert _fixture_seed_symbols(config, fixture_cfg) == ["SPY", "DIA"]

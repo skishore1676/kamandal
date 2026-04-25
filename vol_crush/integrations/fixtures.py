@@ -70,6 +70,53 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _sheet_universe_symbols(config: dict[str, Any]) -> list[str]:
+    """Return enabled universe symbols from the local Google Sheet cache."""
+    if not (config.get("google_sheets") or {}).get("enabled", False):
+        return []
+    try:
+        from vol_crush.sheets.sync import read_universe_cache
+    except ImportError:
+        return []
+
+    seen: set[str] = set()
+    symbols: list[str] = []
+    for row in read_universe_cache(config):
+        symbol = row.symbol.upper()
+        if not row.enabled or not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        symbols.append(symbol)
+    return symbols
+
+
+def _fixture_seed_symbols(
+    config: dict[str, Any], fixture_cfg: dict[str, Any]
+) -> list[str]:
+    """Resolve public seed symbols with Google Sheet universe as primary input."""
+    sheet_symbols = _sheet_universe_symbols(config)
+    raw_fallback = fixture_cfg.get("public_seed_symbols", []) or []
+    fallback_symbols = [str(symbol).upper() for symbol in raw_fallback if symbol]
+    source_symbols = sheet_symbols or fallback_symbols
+
+    seen: set[str] = set()
+    result: list[str] = []
+    for symbol in source_symbols:
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        result.append(symbol)
+    if sheet_symbols:
+        logger.info(
+            "Fixture seed universe loaded from Google Sheet: %d symbols", len(result)
+        )
+    else:
+        logger.info(
+            "Fixture seed universe loaded from config fallback: %d symbols", len(result)
+        )
+    return result
+
+
 def _build_option_snapshots(row: sqlite3.Row) -> list[OptionSnapshot]:
     timestamp = row["timestamp"]
     symbol = row["symbol"]
@@ -250,7 +297,7 @@ def build_fixture_payload(
             )
         provenance.append({"source": str(db_path), "records": len(rows)})
 
-    seed_symbols = fixture_cfg.get("public_seed_symbols", []) or []
+    seed_symbols = _fixture_seed_symbols(config, fixture_cfg)
     if fixture_cfg.get("enable_public_seed_fetch", True):
         for symbol in seed_symbols:
             symbol = symbol.upper()
