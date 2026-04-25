@@ -82,6 +82,14 @@ The system should be able to:
 - expose daily state through Google Sheets
 - leave enough audit trail to diagnose bad behavior after the fact
 
+Operational override:
+
+- `KAMANDAL_FORCE_FULL_LOOP=true` in `.env` tells the launchd wrapper scripts to
+  run even outside the normal weekday/market-hours guard. `KAMANDAL_FORCE_LOOP`
+  is accepted as a shorter alias.
+- This only changes scheduling. It does not change `execution.mode`; keep
+  `execution.mode: shadow` while using the override for observation/backfill.
+
 ## 5. Phase 1: Real Shadow Portfolio
 
 ### Goal
