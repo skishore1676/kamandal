@@ -22,7 +22,7 @@ templates:
       tastytrade defined-risk premium collection. Works on any liquid underlying
       with elevated IV rank.
     filters:
-      iv_rank_min: 25
+      iv_rank_min: 0
       dte_range: [30, 45]
       delta_range: [0.14, 0.18]
       spread_width: 5
@@ -39,7 +39,8 @@ templates:
     dry_run_passed: false
     consensus_notes: >-
       Most-researched tastylive setup. 1/3 credit-to-width minimum ensures
-      risk/reward stays acceptable even in modest-IV environments.
+      risk/reward stays acceptable even in modest-IV environments. The replay
+      branch keeps the IV gate open so extracted ideas can be evaluated.
 
   - id: call_spread_standard
     name: "Standard bear call credit spread"
@@ -49,7 +50,7 @@ templates:
       bull put spread for bearish/neutral bias. Used to balance portfolio delta
       when the book is too long.
     filters:
-      iv_rank_min: 25
+      iv_rank_min: 0
       dte_range: [30, 45]
       delta_range: [0.14, 0.18]
       spread_width: 5
@@ -66,7 +67,8 @@ templates:
     dry_run_passed: false
     consensus_notes: >-
       Use sparingly — equity markets have a long-term upward bias, so selling
-      calls requires stronger conviction or portfolio-delta justification.
+      calls requires stronger conviction or portfolio-delta justification. The
+      replay branch keeps the IV gate open so extracted ideas can be evaluated.
 
   - id: iron_condor_standard
     name: "Standard iron condor"
@@ -106,7 +108,7 @@ templates:
       budget. Primary use is as a diversifying theta generator on non-equity
       instruments like TLT.
     filters:
-      iv_rank_min: 25
+      iv_rank_min: 0
       dte_range: [30, 45]
       delta_range: [0.16, 0.20]
     management:
@@ -132,7 +134,7 @@ templates:
       risk both sides — only fires when premium is genuinely rich. Requires
       high_iv regime and avoids earnings.
     filters:
-      iv_rank_min: 35
+      iv_rank_min: 0
       dte_range: [30, 45]
       delta_range: [0.14, 0.18]
     management:
@@ -141,7 +143,7 @@ templates:
       roll_dte_trigger: 21
       roll_for_credit: true
       close_before_expiration: true
-    allowed_regimes: [high_iv]
+    allowed_regimes: [high_iv, normal_iv]
     avoid_earnings: true
     backtest_approved: false
     dry_run_passed: false
@@ -158,7 +160,7 @@ templates:
       Short put + bear call spread where the net credit >= call spread width,
       eliminating upside risk. Requires elevated IV to collect enough premium.
     filters:
-      iv_rank_min: 35
+      iv_rank_min: 0
       dte_range: [30, 45]
       delta_range: [0.14, 0.18]
       spread_width: 5
@@ -168,7 +170,7 @@ templates:
       roll_dte_trigger: 21
       roll_for_credit: true
       close_before_expiration: true
-    allowed_regimes: [high_iv]
+    allowed_regimes: [high_iv, normal_iv]
     avoid_earnings: true
     backtest_approved: false
     dry_run_passed: false
