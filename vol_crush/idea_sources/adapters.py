@@ -195,6 +195,8 @@ class YouTubeChannelAdapter:
         *,
         title_include_keywords: list[str] | None = None,
         title_exclude_keywords: list[str] | None = None,
+        published_start: str = "",
+        published_end: str = "",
     ) -> SourceFetchResult:
         feed_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
         xml_body = safe_fetch_url(feed_url)
@@ -226,6 +228,10 @@ class YouTubeChannelAdapter:
                 logger.debug(
                     "skipping youtube video on title filter: %r (%s)", title, url
                 )
+                continue
+            if not _published_in_window(
+                published_at, start=published_start, end=published_end
+            ):
                 continue
             considered += 1
 
@@ -356,3 +362,13 @@ def _title_passes_filter(
     if not include_patterns:
         return True
     return any(pattern.search(title) for pattern in include_patterns)
+
+
+def _published_in_window(value: str, *, start: str = "", end: str = "") -> bool:
+    if not value:
+        return not start and not end
+    if start and value < start:
+        return False
+    if end and value >= end:
+        return False
+    return True

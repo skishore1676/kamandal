@@ -148,6 +148,9 @@ def run_source_fetch(
     limit: int | None = None,
     extract_ideas: bool = False,
     generate_summaries: bool = True,
+    published_start: str = "",
+    published_end: str = "",
+    observed_at: str | None = None,
 ) -> tuple[list[RawSourceDocument], list[TradeIdea], list[str]]:
     store = build_local_store(config)
     existing = store.list_raw_documents()
@@ -179,6 +182,8 @@ def run_source_fetch(
                 limit=limit,
                 title_include_keywords=include_keywords,
                 title_exclude_keywords=exclude_keywords,
+                published_start=published_start,
+                published_end=published_end,
             )
             fetched.extend(result.documents)
             notes.extend(result.notes)
@@ -233,7 +238,7 @@ def run_source_fetch(
         )
 
     if not extract_ideas:
-        record_intake_artifacts(store, kept, ideas)
+        record_intake_artifacts(store, kept, ideas, observed_at=observed_at)
         return kept, ideas, notes
     if not extraction_documents:
         return extraction_documents, ideas, notes
@@ -242,7 +247,9 @@ def run_source_fetch(
         llm = build_llm_client(config)
     except RuntimeError as exc:
         notes.append(f"{exc}; raw documents saved but idea extraction skipped.")
-        record_intake_artifacts(store, extraction_documents, ideas)
+        record_intake_artifacts(
+            store, extraction_documents, ideas, observed_at=observed_at
+        )
         return extraction_documents, ideas, notes
 
     # Summaries first — one LLM call per new transcript, saved to disk for
@@ -267,6 +274,7 @@ def run_source_fetch(
         extraction_documents,
         unique_new_ideas,
         summaries_by_document_id=summaries_by_document_id,
+        observed_at=observed_at,
     )
     notes.append(
         "intelligence artifacts: "

@@ -153,6 +153,52 @@ def test_youtube_adapter_title_filter_exclude(monkeypatch):
     assert [doc.metadata["video_id"] for doc in result.documents] == ["v2"]
 
 
+def test_youtube_adapter_published_window_filters_before_transcript(monkeypatch):
+    feed_xml = _build_feed_xml(
+        [
+            {
+                "video_id": "mon",
+                "title": "Monday SPY setup",
+                "published": "2026-04-20T14:00:00+00:00",
+            },
+            {
+                "video_id": "tue",
+                "title": "Tuesday QQQ setup",
+                "published": "2026-04-21T14:00:00+00:00",
+            },
+        ]
+    )
+    fetched_videos = []
+
+    class _Provider:
+        def fetch(self, url, metadata):
+            fetched_videos.append(metadata["video_id"])
+
+            class _Result:
+                text = "Sell premium"
+                error = ""
+                metadata = {}
+
+            return _Result()
+
+    monkeypatch.setattr(
+        "vol_crush.idea_sources.adapters.safe_fetch_url",
+        lambda url, timeout=15, max_attempts=3: (
+            feed_xml if "feeds/videos.xml" in url else ""
+        ),
+    )
+
+    result = YouTubeChannelAdapter(transcript_provider=_Provider()).fetch(
+        "ch",
+        limit=5,
+        published_start="2026-04-21T00:00:00+00:00",
+        published_end="2026-04-22T00:00:00+00:00",
+    )
+
+    assert [doc.metadata["video_id"] for doc in result.documents] == ["tue"]
+    assert fetched_videos == ["tue"]
+
+
 def test_extract_ideas_from_raw_documents_and_dedupe():
     llm = MagicMock()
     llm.chat_json.return_value = {
@@ -455,9 +501,11 @@ def test_record_intake_artifacts_promotes_candidates_and_playbook(tmp_path):
         [doc],
         [idea],
         summaries_by_document_id={"doc1": summary},
+        observed_at="2026-04-20T00:00:00+00:00",
     )
 
     assert len(observations) == 1
+    assert observations[0].observed_at == "2026-04-20T00:00:00+00:00"
     assert observations[0].lane_assignment == ["trade_idea", "operator_digest"]
     assert observations[0].idea_count == 1
     assert len(candidates) == 1

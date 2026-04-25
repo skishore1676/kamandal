@@ -90,6 +90,19 @@ Operational override:
 - This only changes scheduling. It does not change `execution.mode`; keep
   `execution.mode: shadow` while using the override for observation/backfill.
 
+Historical replay smoke:
+
+- `python -m vol_crush.week_replay --start-date YYYY-MM-DD --end-date YYYY-MM-DD`
+  replays source intake, intelligence artifacts, optimization, simulated
+  preflight, shadow fills, position checks, and reflection one weekday at a
+  time.
+- The replay writes to an isolated SQLite/audit directory under
+  `data/replays/<run_id>/` by default, disables Google Sheets writes, and uses
+  `broker.active: replay` so it never calls the live broker.
+- The default date window is the most recent Monday-Friday week. Use
+  `--no-simulated-preflight` to record would-preflight orders without creating
+  shadow fills.
+
 ## 5. Phase 1: Real Shadow Portfolio
 
 ### Goal

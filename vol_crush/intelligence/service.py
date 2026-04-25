@@ -284,9 +284,10 @@ def record_intake_artifacts(
     ideas: list[TradeIdea],
     *,
     summaries_by_document_id: Mapping[str, Mapping[str, Any]] | None = None,
+    observed_at: str | None = None,
 ) -> tuple[list[SourceObservation], list[IdeaCandidate], list[PlaybookInsight]]:
     """Persist deterministic intake artifacts for documents and extracted ideas."""
-    observed_at = _utc_now()
+    observed_at = observed_at or _utc_now()
     ideas_by_doc = _ideas_for_documents(documents, ideas)
     observations: list[SourceObservation] = []
     candidates: list[IdeaCandidate] = []
