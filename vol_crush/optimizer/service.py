@@ -756,6 +756,21 @@ def _approximate_candidate(
                 side="sell",
             )
         ]
+    elif strategy_type == StrategyType.SHORT_CALL.value:
+        if not call:
+            return None
+        credit = credit or call.mid
+        greeks = replace(call.greeks)
+        bpr = max(snapshot.underlying_price * 100 * 0.12, credit * 100 * 5)
+        legs = [
+            OptionLeg(
+                underlying=idea.underlying,
+                expiration=idea.expiration or call.expiration,
+                strike=call.strike,
+                option_type="call",
+                side="sell",
+            )
+        ]
     elif strategy_type in (StrategyType.LONG_CALL.value, StrategyType.LONG_PUT.value):
         base = call if strategy_type == StrategyType.LONG_CALL.value else put
         if not base:

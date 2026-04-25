@@ -14,8 +14,10 @@ from vol_crush.core.models import (
     PlanDecision,
     PortfolioSnapshot,
     Position,
+    RegimePolicy,
     ReplayTrade,
     Strategy,
+    StrategyType,
     TradeAction,
     TradeIdea,
     TradePlan,
@@ -29,7 +31,7 @@ from vol_crush.executor.service import (
 from vol_crush.integrations.fixtures import FixtureMarketDataProvider
 from vol_crush.integrations.storage import LocalStore
 from vol_crush.main import _position_to_sheet_row
-from vol_crush.optimizer.service import build_trade_plan
+from vol_crush.optimizer.service import build_trade_plan, validate_trade_ideas
 from vol_crush.position_manager import service as position_manager_service
 from vol_crush.reflection.service import run_reflection
 from vol_crush.shadow.service import record_shadow_fills_for_orders
@@ -293,6 +295,47 @@ def test_optimizer_builds_executable_trade_plan(tmp_path, monkeypatch):
     assert plan.decision == PlanDecision.EXECUTE
     assert plan.selected_combo_ids == ["idea_spy_put"]
     assert plan.ranked_combos
+
+
+def test_optimizer_builds_short_call_candidate(tmp_path):
+    provider = FixtureMarketDataProvider(_sample_bundle(tmp_path))
+    strategy = Strategy.from_dict(
+        {
+            "id": "spy_short_call",
+            "name": "SPY Short Call",
+            "structure": "short_call",
+            "filters": {
+                "underlyings": ["SPY"],
+                "dte_range": [30, 45],
+                "delta_range": [0.14, 0.2],
+            },
+        }
+    )
+    idea = TradeIdea(
+        id="idea_spy_call",
+        date="2026-04-02",
+        trader_name="Tom",
+        show_name="Bootstrappers",
+        underlying="SPY",
+        strategy_type="short_call",
+        description="Short SPY call",
+        status=IdeaStatus.NEW.value,
+    )
+
+    candidates, notes = validate_trade_ideas(
+        [idea],
+        [strategy],
+        provider,
+        RegimePolicy(regime=MarketRegime.NORMAL_IV),
+        regime=MarketRegime.NORMAL_IV,
+    )
+
+    assert not notes
+    assert len(candidates) == 1
+    assert candidates[0].strategy_type == StrategyType.SHORT_CALL.value
+    assert [(leg.option_type, leg.side) for leg in candidates[0].legs] == [
+        ("call", "sell")
+    ]
 
 
 def test_optimizer_adds_agent_candidates_only_in_shadow(tmp_path, monkeypatch):
