@@ -25,6 +25,12 @@ from vol_crush.integrations.storage import build_local_store
 from vol_crush.optimizer.service import build_trade_plan
 from vol_crush.portfolio_sync.service import sync_public_portfolio
 from vol_crush.position_manager.service import evaluate_positions
+from vol_crush.reflection.service import run_reflection
+
+
+def _execution_mode(config: dict) -> str:
+    raw = str((config.get("execution") or {}).get("mode", "")).lower()
+    return "shadow" if raw == "pending" else raw
 
 
 def _sheets_enabled(config: dict, cli_override: bool | None) -> bool:
@@ -62,7 +68,9 @@ def _try_sheet_pull(config: dict, logger: logging.Logger) -> None:
         for err in report.errors:
             logger.warning("Sheet pull error: %s", err)
     except Exception as exc:  # noqa: BLE001 — sheet is best-effort
-        logger.warning("Sheet pull failed (%s: %s); continuing", type(exc).__name__, exc)
+        logger.warning(
+            "Sheet pull failed (%s: %s); continuing", type(exc).__name__, exc
+        )
 
 
 def _push_recent_ideas_to_sheet(
@@ -100,7 +108,9 @@ def _push_recent_ideas_to_sheet(
                 )
             )
         push_idea_review(config, rows)
-        logger.info("Sheet push: idea_review %d ideas from last %dd", len(rows), lookback_days)
+        logger.info(
+            "Sheet push: idea_review %d ideas from last %dd", len(rows), lookback_days
+        )
         if skipped_missing_underlying:
             logger.info(
                 "Sheet push: skipped %d ideas with missing underlying",
@@ -117,9 +127,11 @@ def _push_recent_ideas_to_sheet(
 def _push_plan_and_positions(config: dict, store, plan, logger: logging.Logger) -> None:
     try:
         from vol_crush.sheets.schemas import DailyPlanRow
-        from vol_crush.sheets.sync import push_daily_plan
+        from vol_crush.sheets.sync import push_daily_plan, push_positions
 
-        created_at = plan.created_at if plan.created_at else datetime.now(UTC).isoformat()
+        created_at = (
+            plan.created_at if plan.created_at else datetime.now(UTC).isoformat()
+        )
         plan_rows: list[DailyPlanRow] = []
         if not plan.candidate_positions:
             plan_rows.append(
@@ -137,6 +149,8 @@ def _push_plan_and_positions(config: dict, store, plan, logger: logging.Logger) 
                     f"{plan.decision.value}; est_credit={candidate.estimated_credit}; "
                     f"est_bpr={candidate.estimated_bpr}; regime={plan.regime}"
                 )
+                if str(candidate.idea_id or "").startswith("agent_"):
+                    note = f"{note}; source=agent_generated"
                 if candidate.rationale:
                     note = f"{note}; {candidate.rationale}"
                 plan_rows.append(
@@ -153,9 +167,130 @@ def _push_plan_and_positions(config: dict, store, plan, logger: logging.Logger) 
                 )
         push_daily_plan(config, plan_rows)
         logger.info("Sheet push: daily_plan %d rows", len(plan_rows))
+
+        positions = _positions_for_cockpit(config, store)
+        position_rows = [_position_to_sheet_row(position) for position in positions]
+        push_positions(config, position_rows)
+        logger.info("Sheet push: positions %d rows", len(position_rows))
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Sheet push daily_plan failed (%s: %s); continuing",
+            type(exc).__name__,
+            exc,
+        )
+
+
+def _positions_for_cockpit(config: dict, store):
+    if _execution_mode(config) == "shadow":
+        from vol_crush.shadow.service import build_shadow_portfolio_snapshot
+
+        snapshot = build_shadow_portfolio_snapshot(store, config)
+        return snapshot.positions
+    return store.list_positions()
+
+
+def _position_to_sheet_row(position):
+    from vol_crush.sheets.schemas import PositionRow
+
+    expirations = list(position.expirations or [])
+    if not expirations:
+        expirations = sorted(
+            {leg.expiration for leg in position.legs if leg.expiration}
+        )
+    legs_summary = "; ".join(
+        f"{leg.side.upper()} {leg.quantity} {leg.underlying} "
+        f"{leg.expiration} {leg.strike:g}{leg.option_type[:1].upper()}"
+        for leg in position.legs
+    )
+    return PositionRow(
+        group_id=position.group_id or position.position_id,
+        strategy_type=position.strategy_type or position.strategy_id,
+        underlying=position.underlying,
+        legs_summary=legs_summary,
+        expiration=", ".join(expirations),
+        quantity=int(position.quantity or 0),
+        net_delta=round(position.greeks.delta, 4),
+        net_theta=round(position.greeks.theta, 4),
+        bpr_used=round(position.bpr, 2),
+        pnl_unrealized=round(position.pnl_dollar, 2),
+        management_status=position.management_status,
+        source=position.source,
+        opened_at=position.open_date,
+        days_open=_days_open(position.open_date),
+    )
+
+
+def _days_open(open_date: str) -> int:
+    if not open_date:
+        return 0
+    try:
+        parsed = date.fromisoformat(open_date[:10])
+    except ValueError:
+        return 0
+    return max((date.today() - parsed).days, 0)
+
+
+def _push_intelligence_cockpit(config: dict, store, logger: logging.Logger) -> None:
+    try:
+        from vol_crush.sheets.schemas import ReflectionSummaryRow, SourceIntelligenceRow
+        from vol_crush.sheets.sync import (
+            push_reflection_summary,
+            push_source_intelligence,
+        )
+
+        source_rows = [
+            SourceIntelligenceRow(
+                source_name=item.source_name,
+                sample_size=item.sample_size,
+                idea_rate=item.idea_rate,
+                digest_rate=item.digest_rate,
+                playbook_rate=item.playbook_rate,
+                plan_conversion_rate=item.plan_conversion_rate,
+                order_conversion_rate=item.order_conversion_rate,
+                false_positive_rate=item.false_positive_rate,
+                current_intake_priority=item.current_intake_priority,
+                operator_rating=item.operator_rating,
+                updated_at=item.updated_at,
+            )
+            for item in store.list_source_intelligence()
+        ]
+        push_source_intelligence(config, source_rows)
+        logger.info("Sheet push: source_intelligence %d rows", len(source_rows))
+
+        summaries = sorted(
+            store.list_reflection_summaries(),
+            key=lambda item: item.generated_at,
+            reverse=True,
+        )[:14]
+        reflection_rows = [
+            ReflectionSummaryRow(
+                summary_id=item.summary_id,
+                generated_at=item.generated_at,
+                window_start=item.window_start,
+                window_end=item.window_end,
+                source_observations=item.source_observation_count,
+                idea_candidates=item.idea_candidate_count,
+                promotable_candidates=item.promotable_candidate_count,
+                playbook_insights=item.playbook_insight_count,
+                trade_plans=item.trade_plan_count,
+                execute_plans=item.execute_plan_count,
+                pending_orders=item.pending_order_count,
+                preflight_ok=item.preflight_ok_count,
+                shadow_fills=item.shadow_fill_count,
+                selected_ideas=list(item.selected_idea_ids),
+                ordered_ideas=list(item.ordered_idea_ids),
+                shadow_filled_ideas=list(item.shadow_filled_idea_ids),
+                high_value_sources=list(item.high_value_sources),
+                noisy_sources=list(item.noisy_sources),
+                notes=list(item.notes),
+            )
+            for item in summaries
+        ]
+        push_reflection_summary(config, reflection_rows)
+        logger.info("Sheet push: reflection_summary %d rows", len(reflection_rows))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Sheet push intelligence cockpit failed (%s: %s); continuing",
             type(exc).__name__,
             exc,
         )
@@ -296,8 +431,12 @@ def main() -> None:
     position_actions = evaluate_positions(config)
     logger.info("Position manager emitted %d actions", len(position_actions))
 
+    reflection = run_reflection(config, store=store)
+    logger.info("Reflection summary refreshed: %s", reflection.summary_id)
+
     if sheets_enabled:
         _push_plan_and_positions(config, store, plan, logger)
+        _push_intelligence_cockpit(config, store, logger)
 
 
 if __name__ == "__main__":

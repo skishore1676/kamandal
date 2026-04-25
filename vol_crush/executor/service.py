@@ -33,7 +33,9 @@ from vol_crush.portfolio_sync.service import sync_public_portfolio
 logger = logging.getLogger("vol_crush.executor")
 
 
-def _normalized_leg_signature(order: PendingOrder) -> tuple[tuple[str, str, float, str, str, int], ...]:
+def _normalized_leg_signature(
+    order: PendingOrder,
+) -> tuple[tuple[str, str, float, str, str, int], ...]:
     legs = []
     for leg in order.legs:
         legs.append(
@@ -86,7 +88,9 @@ def _reconcile_shadow_open_orders(
 ) -> tuple[list[PendingOrder], list[PendingOrder]]:
     filtered: list[PendingOrder] = []
     updates: dict[str, PendingOrder] = {}
-    active_existing = [order for order in existing_orders if _is_active_open_order(order)]
+    active_existing = [
+        order for order in existing_orders if _is_active_open_order(order)
+    ]
 
     for new_order in new_orders:
         duplicate = next(
@@ -255,6 +259,7 @@ def create_pending_orders(
                 greeks_impact=scaled_candidate.estimated_greeks,
                 notes="Pending order generated from deterministic optimizer plan.",
                 legs=candidate.legs,
+                strategy_type=candidate.strategy_type,
             )
         )
     return orders
@@ -271,10 +276,15 @@ def execute_latest_plan(config: dict) -> list[PendingOrder]:
     if not approved:
         logger.info("Skipping executor for %s: %s", latest.plan_id, approval_note)
         return []
-    snapshot = store.get_latest_portfolio_snapshot() or PortfolioSnapshot(
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        net_liquidation_value=100000.0,
-    )
+    if _execution_mode(dict(config)) == "shadow":
+        from vol_crush.shadow.service import build_shadow_portfolio_snapshot
+
+        snapshot = build_shadow_portfolio_snapshot(store, config)
+    else:
+        snapshot = store.get_latest_portfolio_snapshot() or PortfolioSnapshot(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            net_liquidation_value=100000.0,
+        )
     snapshot = _apply_shadow_nlv_override(snapshot, config)
     orders = create_pending_orders(latest, snapshot, config)
     superseded_orders: list[PendingOrder] = []
@@ -294,11 +304,15 @@ def execute_latest_plan(config: dict) -> list[PendingOrder]:
             adapter = PublicBrokerAdapter(config)
             orders = adapter.submit_pending_orders(orders)
             store.save_pending_orders(orders)
-            if (
-                config.get("broker", {})
-                .get("public", {})
-                .get("sync_portfolio_after_submission", True)
-            ):
+            if _execution_mode(dict(config)) == "shadow":
+                from vol_crush.shadow.service import record_shadow_fills_for_orders
+
+                shadow_fills = record_shadow_fills_for_orders(store, orders, config)
+                if shadow_fills:
+                    store.save_pending_orders(orders)
+            if _execution_mode(dict(config)) == "live" and config.get("broker", {}).get(
+                "public", {}
+            ).get("sync_portfolio_after_submission", True):
                 try:
                     sync_public_portfolio(config, store=store, adapter=adapter)
                 except Exception as exc:

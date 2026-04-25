@@ -186,7 +186,15 @@ class PublicApiClient:
             },
             timeout=30,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            body = response.text.strip()
+            if body:
+                raise requests.HTTPError(
+                    f"{exc} response_body={body[:1000]}", response=response
+                ) from exc
+            raise
         payload = response.json()
         token = payload.get("accessToken")
         if not token:
@@ -415,6 +423,7 @@ class PublicBrokerAdapter:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         account_id = self.get_primary_account_id()
         payload = self._order_payload(order, preflight=True)
+        order.broker_payload = payload
         if len(order.legs) == 1:
             response = self.client.post(
                 f"/userapigateway/trading/{account_id}/preflight/single-leg",
@@ -432,6 +441,7 @@ class PublicBrokerAdapter:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         account_id = self.get_primary_account_id()
         payload = self._order_payload(order, preflight=False)
+        order.broker_payload = payload
         if len(order.legs) == 1:
             response = self.client.post(
                 f"/userapigateway/trading/{account_id}/order",

@@ -7,14 +7,21 @@ from typing import Protocol
 from vol_crush.core.models import (
     BacktestResult,
     BrokerPositionLeg,
+    IdeaCandidate,
     MarketRegime,
     MarketSnapshot,
     PendingOrder,
+    PlaybookInsight,
+    PolicyProposal,
     PortfolioSnapshot,
     Position,
     RawSourceDocument,
+    ReflectionSummary,
     RegimePolicy,
     ReplayTrade,
+    ShadowFill,
+    SourceIntelligence,
+    SourceObservation,
     TradeIdea,
     TradePlan,
 )
@@ -38,6 +45,44 @@ class StorageBackend(Protocol):
     def save_positions(self, positions: list[Position]) -> None: ...
 
     def list_positions(self, status: str | None = None) -> list[Position]: ...
+
+    def save_shadow_positions(self, positions: list[Position]) -> None: ...
+
+    def list_shadow_positions(self, status: str | None = None) -> list[Position]: ...
+
+    def save_shadow_fills(self, fills: list[ShadowFill]) -> None: ...
+
+    def list_shadow_fills(self) -> list[ShadowFill]: ...
+
+    def save_shadow_portfolio_snapshot(self, snapshot: PortfolioSnapshot) -> None: ...
+
+    def get_latest_shadow_portfolio_snapshot(self) -> PortfolioSnapshot | None: ...
+
+    def save_source_observations(
+        self, observations: list[SourceObservation]
+    ) -> None: ...
+
+    def list_source_observations(self) -> list[SourceObservation]: ...
+
+    def save_idea_candidates(self, candidates: list[IdeaCandidate]) -> None: ...
+
+    def list_idea_candidates(self) -> list[IdeaCandidate]: ...
+
+    def save_playbook_insights(self, insights: list[PlaybookInsight]) -> None: ...
+
+    def list_playbook_insights(self) -> list[PlaybookInsight]: ...
+
+    def save_source_intelligence(self, items: list[SourceIntelligence]) -> None: ...
+
+    def list_source_intelligence(self) -> list[SourceIntelligence]: ...
+
+    def save_policy_proposals(self, proposals: list[PolicyProposal]) -> None: ...
+
+    def list_policy_proposals(self) -> list[PolicyProposal]: ...
+
+    def save_reflection_summaries(self, summaries: list[ReflectionSummary]) -> None: ...
+
+    def list_reflection_summaries(self) -> list[ReflectionSummary]: ...
 
     def replace_broker_legs(self, broker: str, legs: list[BrokerPositionLeg]) -> None:
         """Wipe all legs for the given broker and write the new set.

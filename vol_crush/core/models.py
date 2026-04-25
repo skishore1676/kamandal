@@ -44,6 +44,7 @@ class PositionSource(str, Enum):
     PUBLIC_INFERRED = (
         "public_inferred"  # grouped deterministically from raw broker legs
     )
+    SHADOW = "shadow"  # simulated fill in Kamandal's shadow account
     MANUAL = "manual"  # human-entered or test-only
 
 
@@ -1229,6 +1230,7 @@ class PendingOrder:
     broker_status: str = ""
     broker_payload: dict[str, Any] = field(default_factory=dict)
     broker_response: dict[str, Any] = field(default_factory=dict)
+    strategy_type: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1254,6 +1256,7 @@ class PendingOrder:
             "broker_status": self.broker_status,
             "broker_payload": self.broker_payload,
             "broker_response": self.broker_response,
+            "strategy_type": self.strategy_type,
         }
 
     @classmethod
@@ -1282,7 +1285,262 @@ class PendingOrder:
             broker_status=d.get("broker_status", ""),
             broker_payload=dict(d.get("broker_payload", {})),
             broker_response=dict(d.get("broker_response", {})),
+            strategy_type=d.get("strategy_type", ""),
         )
+
+
+@dataclass
+class ShadowFill:
+    """A simulated fill created after a successful broker preflight in shadow mode."""
+
+    fill_id: str
+    pending_order_id: str
+    plan_id: str
+    filled_at: str
+    action: str
+    underlying: str
+    strategy_id: str
+    quantity: int
+    fill_price: float
+    gross_credit: float
+    estimated_bpr: float
+    greeks_impact: Greeks
+    idea_id: str = ""
+    strategy_type: str = ""
+    broker: str = ""
+    broker_order_id: str = ""
+    broker_status: str = ""
+    preflight_response: dict[str, Any] = field(default_factory=dict)
+    legs: list[OptionLeg] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "fill_id": self.fill_id,
+            "pending_order_id": self.pending_order_id,
+            "plan_id": self.plan_id,
+            "idea_id": self.idea_id,
+            "filled_at": self.filled_at,
+            "action": self.action,
+            "underlying": self.underlying,
+            "strategy_id": self.strategy_id,
+            "strategy_type": self.strategy_type,
+            "quantity": self.quantity,
+            "fill_price": self.fill_price,
+            "gross_credit": self.gross_credit,
+            "estimated_bpr": self.estimated_bpr,
+            "greeks_impact": self.greeks_impact.to_dict(),
+            "broker": self.broker,
+            "broker_order_id": self.broker_order_id,
+            "broker_status": self.broker_status,
+            "preflight_response": self.preflight_response,
+            "legs": [leg.to_dict() for leg in self.legs],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "ShadowFill":
+        return cls(
+            fill_id=d.get("fill_id", ""),
+            pending_order_id=d.get("pending_order_id", ""),
+            plan_id=d.get("plan_id", ""),
+            idea_id=d.get("idea_id", ""),
+            filled_at=d.get("filled_at", ""),
+            action=d.get("action", TradeAction.OPEN.value),
+            underlying=d.get("underlying", ""),
+            strategy_id=d.get("strategy_id", ""),
+            strategy_type=d.get("strategy_type", ""),
+            quantity=int(d.get("quantity", 1)),
+            fill_price=float(d.get("fill_price", 0.0)),
+            gross_credit=float(d.get("gross_credit", 0.0)),
+            estimated_bpr=float(d.get("estimated_bpr", 0.0)),
+            greeks_impact=Greeks.from_dict(d.get("greeks_impact", {})),
+            broker=d.get("broker", ""),
+            broker_order_id=d.get("broker_order_id", ""),
+            broker_status=d.get("broker_status", ""),
+            preflight_response=dict(d.get("preflight_response", {})),
+            legs=[OptionLeg.from_dict(item) for item in d.get("legs", [])],
+        )
+
+
+@dataclass
+class SourceObservation:
+    """Structured classification of one ingested source item."""
+
+    observation_id: str
+    source_id: str
+    observed_at: str
+    source_type: str
+    source_name: str
+    title: str
+    url: str = ""
+    published_at: str = ""
+    content_type: str = ""
+    lane_assignment: list[str] = field(default_factory=list)
+    actionable_ideas_present: bool = False
+    idea_count: int = 0
+    playbook_value: bool = False
+    operator_value: bool = False
+    confidence: str = "medium"
+    evidence_snippets: list[str] = field(default_factory=list)
+    notes: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "SourceObservation":
+        data = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        data["lane_assignment"] = list(data.get("lane_assignment") or [])
+        data["evidence_snippets"] = list(data.get("evidence_snippets") or [])
+        return cls(**data)
+
+
+@dataclass
+class IdeaCandidate:
+    """Intermediate intelligence artifact before operator-facing idea review."""
+
+    candidate_id: str
+    idea_id: str
+    source_id: str
+    observed_at: str
+    underlying: str
+    strategy_type: str
+    expectation: str = ""
+    description: str = ""
+    rationale: str = ""
+    confidence: str = "medium"
+    evidence_snippets: list[str] = field(default_factory=list)
+    promotable: bool = False
+    rejection_reason: str = ""
+    duplicate_cluster_id: str = ""
+    promoted_to_idea_review: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "IdeaCandidate":
+        data = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        data["evidence_snippets"] = list(data.get("evidence_snippets") or [])
+        return cls(**data)
+
+
+@dataclass
+class PlaybookInsight:
+    """Reusable strategy lesson distilled from intake/reflection."""
+
+    insight_id: str
+    source_id: str
+    observed_at: str
+    lesson: str
+    applies_to_regimes: list[str] = field(default_factory=list)
+    applies_to_strategies: list[str] = field(default_factory=list)
+    evidence_snippets: list[str] = field(default_factory=list)
+    confidence: str = "medium"
+    proposal_candidate: bool = False
+    operator_status: str = "new"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "PlaybookInsight":
+        data = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        data["applies_to_regimes"] = list(data.get("applies_to_regimes") or [])
+        data["applies_to_strategies"] = list(data.get("applies_to_strategies") or [])
+        data["evidence_snippets"] = list(data.get("evidence_snippets") or [])
+        return cls(**data)
+
+
+@dataclass
+class SourceIntelligence:
+    """Aggregated scorecard for a source/channel/family."""
+
+    source_name: str
+    updated_at: str
+    sample_size: int = 0
+    idea_rate: float = 0.0
+    digest_rate: float = 0.0
+    playbook_rate: float = 0.0
+    false_positive_rate: float = 0.0
+    plan_conversion_rate: float = 0.0
+    order_conversion_rate: float = 0.0
+    operator_rating: str = ""
+    current_intake_priority: str = "normal"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "SourceIntelligence":
+        data = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        return cls(**data)
+
+
+@dataclass
+class PolicyProposal:
+    """Evidence-backed proposal for a policy/config/prompt change."""
+
+    proposal_id: str
+    created_at: str
+    target_type: str
+    target_id: str
+    proposed_change: str
+    justification: str
+    evidence_refs: list[str] = field(default_factory=list)
+    risk_level: str = "medium"
+    status: str = "new"
+    operator_decision: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "PolicyProposal":
+        data = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        data["evidence_refs"] = list(data.get("evidence_refs") or [])
+        return cls(**data)
+
+
+@dataclass
+class ReflectionSummary:
+    """Deterministic review of intake, planning, orders, and shadow fills."""
+
+    summary_id: str
+    generated_at: str
+    window_start: str = ""
+    window_end: str = ""
+    source_observation_count: int = 0
+    idea_candidate_count: int = 0
+    promotable_candidate_count: int = 0
+    playbook_insight_count: int = 0
+    trade_plan_count: int = 0
+    execute_plan_count: int = 0
+    pending_order_count: int = 0
+    preflight_ok_count: int = 0
+    shadow_fill_count: int = 0
+    selected_idea_ids: list[str] = field(default_factory=list)
+    ordered_idea_ids: list[str] = field(default_factory=list)
+    shadow_filled_idea_ids: list[str] = field(default_factory=list)
+    noisy_sources: list[str] = field(default_factory=list)
+    high_value_sources: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "ReflectionSummary":
+        data = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        for key in (
+            "selected_idea_ids",
+            "ordered_idea_ids",
+            "shadow_filled_idea_ids",
+            "noisy_sources",
+            "high_value_sources",
+            "notes",
+        ):
+            data[key] = list(data.get(key) or [])
+        return cls(**data)
 
 
 @dataclass

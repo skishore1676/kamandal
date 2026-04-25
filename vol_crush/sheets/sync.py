@@ -28,7 +28,9 @@ from vol_crush.sheets.schemas import (
     OperatorDigestRow,
     PositionRow,
     ProfileConfigRow,
+    ReflectionSummaryRow,
     RegimeControlRow,
+    SourceIntelligenceRow,
     StrategyApprovalRow,
     TemplateLibraryRow,
     UniverseMemberRow,
@@ -46,6 +48,8 @@ _DEFAULT_TABS = {
     "idea_review": "idea_review",
     "daily_plan": "daily_plan",
     "positions": "positions",
+    "source_intelligence": "source_intelligence",
+    "reflection_summary": "reflection_summary",
 }
 
 # Example rows used by bootstrap so a fresh sheet shows operators the shape.
@@ -84,7 +88,8 @@ def _template_seed_rows() -> list[list[Any]]:
                 structure=structure,
                 name=str(item.get("name") or "").strip(),
                 allowed_regimes=[
-                    str(value).strip() for value in item.get("allowed_regimes", []) or []
+                    str(value).strip()
+                    for value in item.get("allowed_regimes", []) or []
                 ],
                 iv_rank_min=filters.get("iv_rank_min"),
                 iv_rank_max=filters.get("iv_rank_max"),
@@ -223,9 +228,7 @@ def bootstrap_sheet(config: Mapping[str, Any]) -> list[str]:
         example_rows=_template_seed_rows(),
     )
     template_library.set_enum_validation("roll_for_credit", ["TRUE", "FALSE"])
-    template_library.set_enum_validation(
-        "close_before_expiration", ["TRUE", "FALSE"]
-    )
+    template_library.set_enum_validation("close_before_expiration", ["TRUE", "FALSE"])
     template_library.set_enum_validation("avoid_earnings", ["TRUE", "FALSE"])
     notes.append("template_library: header + seeded rows set")
 
@@ -272,6 +275,18 @@ def bootstrap_sheet(config: Mapping[str, Any]) -> list[str]:
     daily_plan = client.get_worksheet(tabs["daily_plan"])
     _ensure_headered_tab(daily_plan, header=list(DailyPlanRow.HEADER))
     notes.append("daily_plan: header set (write target)")
+
+    positions = client.get_worksheet(tabs["positions"])
+    _ensure_headered_tab(positions, header=list(PositionRow.HEADER))
+    notes.append("positions: header set (write target)")
+
+    source_intelligence = client.get_worksheet(tabs["source_intelligence"])
+    _ensure_headered_tab(source_intelligence, header=list(SourceIntelligenceRow.HEADER))
+    notes.append("source_intelligence: header set (write target)")
+
+    reflection_summary = client.get_worksheet(tabs["reflection_summary"])
+    _ensure_headered_tab(reflection_summary, header=list(ReflectionSummaryRow.HEADER))
+    notes.append("reflection_summary: header set (write target)")
 
     client.ensure_no_default_sheet1()
     return notes
@@ -574,9 +589,7 @@ def _pull_idea_review(
     payload = {
         "fetched_at": _utc_now_stamp(),
         "tab": title,
-        "rows": [
-            {**asdict(row), "approval": row.approval.value} for row in parsed
-        ],
+        "rows": [{**asdict(row), "approval": row.approval.value} for row in parsed],
     }
     digest = _hash_payload(payload["rows"])
     payload["hash"] = digest
@@ -705,21 +718,15 @@ def _idea_review_metadata_for_row(
 # ── Push ────────────────────────────────────────────────────────────
 
 
-def push_daily_plan(
-    config: Mapping[str, Any], rows: Sequence[DailyPlanRow]
-) -> None:
+def push_daily_plan(config: Mapping[str, Any], rows: Sequence[DailyPlanRow]) -> None:
     tabs = _tabs(config)
     client = GoogleSheetClient.from_config(config)
     handle = client.get_worksheet(tabs["daily_plan"])
-    handle.replace_contents(
-        DailyPlanRow.HEADER, [row.to_row() for row in rows]
-    )
+    handle.replace_contents(DailyPlanRow.HEADER, [row.to_row() for row in rows])
     logger.info("pushed %d daily_plan rows", len(rows))
 
 
-def push_positions(
-    config: Mapping[str, Any], rows: Sequence[PositionRow]
-) -> None:
+def push_positions(config: Mapping[str, Any], rows: Sequence[PositionRow]) -> None:
     tabs = _tabs(config)
     client = GoogleSheetClient.from_config(config)
     handle = client.get_worksheet(tabs["positions"])
@@ -727,9 +734,29 @@ def push_positions(
     logger.info("pushed %d positions rows", len(rows))
 
 
-def push_idea_review(
-    config: Mapping[str, Any], rows: Sequence[IdeaReviewRow]
+def push_source_intelligence(
+    config: Mapping[str, Any], rows: Sequence[SourceIntelligenceRow]
 ) -> None:
+    tabs = _tabs(config)
+    client = GoogleSheetClient.from_config(config)
+    handle = client.get_worksheet(tabs["source_intelligence"])
+    handle.replace_contents(
+        SourceIntelligenceRow.HEADER, [row.to_row() for row in rows]
+    )
+    logger.info("pushed %d source_intelligence rows", len(rows))
+
+
+def push_reflection_summary(
+    config: Mapping[str, Any], rows: Sequence[ReflectionSummaryRow]
+) -> None:
+    tabs = _tabs(config)
+    client = GoogleSheetClient.from_config(config)
+    handle = client.get_worksheet(tabs["reflection_summary"])
+    handle.replace_contents(ReflectionSummaryRow.HEADER, [row.to_row() for row in rows])
+    logger.info("pushed %d reflection_summary rows", len(rows))
+
+
+def push_idea_review(config: Mapping[str, Any], rows: Sequence[IdeaReviewRow]) -> None:
     """Publish newly-extracted ideas into the bidirectional review tab.
 
     Preserves existing `approval`, `operator_notes`, `reviewed_by`, `reviewed_at`

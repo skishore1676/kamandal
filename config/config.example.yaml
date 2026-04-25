@@ -75,6 +75,8 @@ google_sheets:
     idea_review: idea_review            # BIDIRECTIONAL: human approves LLM-extracted ideas
     daily_plan: daily_plan              # WRITE: today's optimizer output
     positions: positions                # WRITE: grouped Positions with health flags
+    source_intelligence: source_intelligence  # WRITE: source quality scorecard
+    reflection_summary: reflection_summary    # WRITE: deterministic learning loop summary
 
 # Backtesting
 backtesting:
@@ -206,6 +208,12 @@ idea_sources:
   # per video: <summaries_archive.path>/<YYYY-MM-DD>/<video_id>_summary.md
   summaries_archive:
     path: data/ideas
+
+intelligence:
+  agent_candidates:
+    enabled: false       # shadow-only: let Kamandal propose internal playbook/universe candidates
+    max_candidates: 3
+    allowed_structures: []  # optional StrategyType allowlist; empty uses regime prefer_structures
 
 # Execution
 execution:

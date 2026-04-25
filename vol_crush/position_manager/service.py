@@ -46,6 +46,11 @@ from vol_crush.integrations.storage import build_local_store
 logger = logging.getLogger("vol_crush.position_manager")
 
 
+def _execution_mode(config: dict) -> str:
+    raw = str((config.get("execution") or {}).get("mode", "")).lower()
+    return "shadow" if raw == "pending" else raw
+
+
 def _strategy_map() -> dict[str, Strategy]:
     """Load resolved strategies from templates + profiles, falling back to legacy strategies.yaml."""
     templates = [StrategyTemplate.from_dict(d) for d in load_strategy_templates() if d]
@@ -92,9 +97,14 @@ def _assert_full_group_close(position: Position, order_legs: list) -> None:
 def evaluate_positions(config: dict) -> list[PendingOrder]:
     store = build_local_store(config)
     strategies = _strategy_map()
-    positions = [
-        p for p in store.list_positions() if p.status == PositionStatus.OPEN.value
-    ]
+    if _execution_mode(config) == "shadow":
+        from vol_crush.shadow.service import build_shadow_portfolio_snapshot
+
+        build_shadow_portfolio_snapshot(store, config)
+        source_positions = store.list_shadow_positions()
+    else:
+        source_positions = store.list_positions()
+    positions = [p for p in source_positions if p.status == PositionStatus.OPEN.value]
     actions: list[PendingOrder] = []
     timestamp = datetime.now(UTC).isoformat()
 
@@ -165,6 +175,7 @@ def evaluate_positions(config: dict) -> list[PendingOrder]:
                 notes=note,
                 legs=order_legs,
                 broker_order_id=position.broker_order_id,
+                strategy_type=position.strategy_type,
             )
         )
     if actions:

@@ -14,13 +14,15 @@ from vol_crush.sheets.schemas import (
     IdeaApproval,
     IdeaReviewRow,
     OperatorDigestRow,
+    PositionRow,
     ProfileConfigRow,
+    ReflectionSummaryRow,
     RegimeControlRow,
+    SourceIntelligenceRow,
     StrategyApprovalRow,
     TemplateLibraryRow,
     UniverseMemberRow,
 )
-
 
 # ── Schema parsing / round-trip ──────────────────────────────────────
 
@@ -59,7 +61,9 @@ def test_strategy_row_not_live_eligible_unless_all_conditions_hold():
         "authorization_mode": "live",
     }
     assert StrategyApprovalRow.from_row(base).is_live_eligible()
-    assert not StrategyApprovalRow.from_row({**base, "enabled": "FALSE"}).is_live_eligible()
+    assert not StrategyApprovalRow.from_row(
+        {**base, "enabled": "FALSE"}
+    ).is_live_eligible()
     assert not StrategyApprovalRow.from_row(
         {**base, "authorization_mode": "shadow"}
     ).is_live_eligible()
@@ -86,7 +90,11 @@ def test_strategy_row_round_trip_to_row_and_back():
 
 
 def test_idea_review_row_parses_strikes_from_string():
-    raw = {"underlying": "spy", "proposed_strategy": "put_vertical", "approval": "approve"}
+    raw = {
+        "underlying": "spy",
+        "proposed_strategy": "put_vertical",
+        "approval": "approve",
+    }
     row = IdeaReviewRow.from_row(raw)
     assert row.underlying == "SPY"
     assert row.proposed_strategy == "put_vertical"
@@ -139,6 +147,35 @@ def test_daily_plan_row_emits_visible_idea_id():
     assert cells[-1] == "idea_123"
     recovered = DailyPlanRow.from_row(dict(zip(DailyPlanRow.HEADER, cells)))
     assert recovered.idea_id == "idea_123"
+
+
+def test_intelligence_rows_render_for_cockpit():
+    source = SourceIntelligenceRow(
+        source_name="youtube:ch",
+        sample_size=4,
+        idea_rate=0.5,
+        digest_rate=0.75,
+        playbook_rate=0.25,
+        plan_conversion_rate=0.5,
+        order_conversion_rate=0.25,
+        current_intake_priority="high",
+        updated_at="2026-04-25T12:00:00+00:00",
+    )
+    reflection = ReflectionSummaryRow(
+        summary_id="reflection_1",
+        generated_at="2026-04-25T12:00:00+00:00",
+        source_observations=4,
+        idea_candidates=2,
+        shadow_fills=1,
+        selected_ideas=["idea_1"],
+        notes=["Orders existed", "Shadow fill recorded"],
+    )
+
+    assert source.to_row()[0] == "youtube:ch"
+    assert source.to_row()[8] == "high"
+    assert reflection.to_row()[0] == "reflection_1"
+    assert reflection.to_row()[13] == "idea_1"
+    assert reflection.to_row()[-1] == "Orders existed | Shadow fill recorded"
 
 
 def test_operator_digest_row_round_trip():
@@ -276,7 +313,9 @@ class _FakeSpreadsheet:
         return list(self._worksheets.values())
 
     def del_worksheet(self, worksheet):
-        self._worksheets = {k: v for k, v in self._worksheets.items() if v is not worksheet}
+        self._worksheets = {
+            k: v for k, v in self._worksheets.items() if v is not worksheet
+        }
 
     def batch_update(self, body):
         self.batch_updates.append(body)
@@ -365,6 +404,9 @@ def test_bootstrap_populates_all_control_tabs(tmp_path, monkeypatch):
         "operator_digest",
         "idea_review",
         "daily_plan",
+        "positions",
+        "source_intelligence",
+        "reflection_summary",
     ):
         assert expected in titles
     assert "Sheet1" not in titles  # removed once other tabs exist
@@ -379,11 +421,17 @@ def test_bootstrap_populates_all_control_tabs(tmp_path, monkeypatch):
     template_rows = spreadsheet.worksheet("template_library").get_all_values()
     universe_rows = spreadsheet.worksheet("universe").get_all_values()
     digest_rows = spreadsheet.worksheet("operator_digest").get_all_values()
+    positions_rows = spreadsheet.worksheet("positions").get_all_values()
+    source_intel_rows = spreadsheet.worksheet("source_intelligence").get_all_values()
+    reflection_rows = spreadsheet.worksheet("reflection_summary").get_all_values()
     assert regime_rows[0] == list(RegimeControlRow.HEADER)
     assert template_rows[0] == list(TemplateLibraryRow.HEADER)
     assert profiles_rows[0] == list(ProfileConfigRow.HEADER)
     assert universe_rows[0] == list(UniverseMemberRow.HEADER)
     assert digest_rows[0] == list(OperatorDigestRow.HEADER)
+    assert positions_rows[0] == list(PositionRow.HEADER)
+    assert source_intel_rows[0] == list(SourceIntelligenceRow.HEADER)
+    assert reflection_rows[0] == list(ReflectionSummaryRow.HEADER)
 
 
 def test_pull_stamps_approval_metadata_and_caches(tmp_path, monkeypatch):
@@ -407,7 +455,14 @@ def test_pull_stamps_approval_metadata_and_caches(tmp_path, monkeypatch):
         range_name="A1",
         values=[
             list(IdeaReviewRow.HEADER),
-            ["2026-04-15", "approve", "SPY", "bullish", "short_put", "sell SPY 45dte put"],
+            [
+                "2026-04-15",
+                "approve",
+                "SPY",
+                "bullish",
+                "short_put",
+                "sell SPY 45dte put",
+            ],
         ],
         value_input_option="USER_ENTERED",
     )
@@ -456,21 +511,21 @@ def test_push_idea_review_preserves_operator_fields(tmp_path, monkeypatch):
 
     new_rows = [
         IdeaReviewRow(
-                idea_id="idea_1",
-                date="2026-04-15",
-                underlying="SPY",
-                proposed_strategy="short_put",
-                note="FRESHER DESCRIPTION",  # app overwrites
-                approval=IdeaApproval.PENDING,  # app pushes as pending
-            ),
-            IdeaReviewRow(
-                idea_id="idea_2",
-                date="2026-04-15",
-                underlying="QQQ",
-                proposed_strategy="short_put",
-                note="new idea",
-                approval=IdeaApproval.PENDING,
-            ),
+            idea_id="idea_1",
+            date="2026-04-15",
+            underlying="SPY",
+            proposed_strategy="short_put",
+            note="FRESHER DESCRIPTION",  # app overwrites
+            approval=IdeaApproval.PENDING,  # app pushes as pending
+        ),
+        IdeaReviewRow(
+            idea_id="idea_2",
+            date="2026-04-15",
+            underlying="QQQ",
+            proposed_strategy="short_put",
+            note="new idea",
+            approval=IdeaApproval.PENDING,
+        ),
     ]
     push_idea_review(_fake_client_config(tmp_path), new_rows)
 
@@ -484,7 +539,9 @@ def test_push_idea_review_preserves_operator_fields(tmp_path, monkeypatch):
     assert all_rows[2][2] == "QQQ"
 
 
-def test_push_idea_review_matches_legacy_row_without_visible_idea_id(tmp_path, monkeypatch):
+def test_push_idea_review_matches_legacy_row_without_visible_idea_id(
+    tmp_path, monkeypatch
+):
     spreadsheet = _FakeSpreadsheet("kamandal_control")
     _install_fake_client(monkeypatch, spreadsheet)
 
@@ -492,7 +549,14 @@ def test_push_idea_review_matches_legacy_row_without_visible_idea_id(tmp_path, m
     idea_review.update(
         range_name="A1",
         values=[
-            ["date", "approval", "underlying", "expectation", "proposed_strategy", "note"],
+            [
+                "date",
+                "approval",
+                "underlying",
+                "expectation",
+                "proposed_strategy",
+                "note",
+            ],
             ["2026-04-15", "approve", "SPY", "neutral", "short_put", "sell SPY put"],
         ],
         value_input_option="USER_ENTERED",
@@ -578,6 +642,47 @@ def test_push_operator_digest_preserves_operator_notes(tmp_path, monkeypatch):
     assert all_rows[1][4] == "Fresh summary"
     assert all_rows[1][7] == "watch this again"
     assert all_rows[2][2] == "Options Basics"
+
+
+def test_push_intelligence_cockpit_tabs(tmp_path, monkeypatch):
+    spreadsheet = _FakeSpreadsheet("kamandal_control")
+    _install_fake_client(monkeypatch, spreadsheet)
+    spreadsheet.add_worksheet(title="source_intelligence")
+    spreadsheet.add_worksheet(title="reflection_summary")
+
+    from vol_crush.sheets.sync import push_reflection_summary, push_source_intelligence
+
+    push_source_intelligence(
+        _fake_client_config(tmp_path),
+        [
+            SourceIntelligenceRow(
+                source_name="youtube:ch",
+                sample_size=2,
+                idea_rate=0.5,
+                current_intake_priority="high",
+            )
+        ],
+    )
+    push_reflection_summary(
+        _fake_client_config(tmp_path),
+        [
+            ReflectionSummaryRow(
+                summary_id="reflection_1",
+                generated_at="2026-04-25T12:00:00+00:00",
+                source_observations=2,
+                notes=["ok"],
+            )
+        ],
+    )
+
+    source_rows = spreadsheet.worksheet("source_intelligence").get_all_values()
+    reflection_rows = spreadsheet.worksheet("reflection_summary").get_all_values()
+    assert source_rows[0] == list(SourceIntelligenceRow.HEADER)
+    assert source_rows[1][0] == "youtube:ch"
+    assert source_rows[1][8] == "high"
+    assert reflection_rows[0] == list(ReflectionSummaryRow.HEADER)
+    assert reflection_rows[1][0] == "reflection_1"
+    assert reflection_rows[1][-1] == "ok"
 
 
 def test_pull_idea_review_restores_hidden_metadata(tmp_path, monkeypatch):
@@ -709,7 +814,9 @@ def test_load_strategy_objects_prefers_sheet_runtime_controls(tmp_path):
     strategies = load_strategy_objects(config)
 
     short_put_idx = [
-        strategy for strategy in strategies if strategy.id == "short_put_conservative:index_etf"
+        strategy
+        for strategy in strategies
+        if strategy.id == "short_put_conservative:index_etf"
     ]
     assert len(short_put_idx) == 1
     assert short_put_idx[0].filters.underlyings == ["SPY", "QQQ"]

@@ -19,7 +19,11 @@ from vol_crush.core.config import (
     load_underlying_profiles,
     shadow_net_liquidation_value,
 )
-from vol_crush.core.interfaces import MarketDataProvider, RegimeEvaluator, StorageBackend
+from vol_crush.core.interfaces import (
+    MarketDataProvider,
+    RegimeEvaluator,
+    StorageBackend,
+)
 from vol_crush.core.logging import setup_logging
 from vol_crush.core.models import (
     CandidatePosition,
@@ -103,24 +107,34 @@ def _sheet_template_overrides(
             template.filters.iv_rank_max = row.iv_rank_max
         if row.dte_min is not None or row.dte_max is not None:
             template.filters.dte_range = (
-                row.dte_min if row.dte_min is not None else template.filters.dte_range[0],
-                row.dte_max if row.dte_max is not None else template.filters.dte_range[1],
+                (
+                    row.dte_min
+                    if row.dte_min is not None
+                    else template.filters.dte_range[0]
+                ),
+                (
+                    row.dte_max
+                    if row.dte_max is not None
+                    else template.filters.dte_range[1]
+                ),
             )
         if row.delta_min is not None or row.delta_max is not None:
             template.filters.delta_range = (
-                row.delta_min
-                if row.delta_min is not None
-                else template.filters.delta_range[0],
-                row.delta_max
-                if row.delta_max is not None
-                else template.filters.delta_range[1],
+                (
+                    row.delta_min
+                    if row.delta_min is not None
+                    else template.filters.delta_range[0]
+                ),
+                (
+                    row.delta_max
+                    if row.delta_max is not None
+                    else template.filters.delta_range[1]
+                ),
             )
         if row.spread_width is not None:
             template.filters.spread_width = row.spread_width
         if row.min_credit_to_width_ratio is not None:
-            template.filters.min_credit_to_width_ratio = (
-                row.min_credit_to_width_ratio
-            )
+            template.filters.min_credit_to_width_ratio = row.min_credit_to_width_ratio
         if row.profit_target_pct is not None:
             template.management.profit_target_pct = row.profit_target_pct
         if row.max_loss_multiple is not None:
@@ -233,7 +247,11 @@ def _sheet_strategy_objects(
     except ImportError:
         return []
 
-    rows = [row for row in read_approvals_cache(config) if row.strategy_id and row.stock_profile]
+    rows = [
+        row
+        for row in read_approvals_cache(config)
+        if row.strategy_id and row.stock_profile
+    ]
     if not rows:
         return []
 
@@ -249,7 +267,9 @@ def _sheet_strategy_objects(
     return list(resolved.values())
 
 
-def load_strategy_objects(config_path: dict | str | Path | None = None) -> list[Strategy]:
+def load_strategy_objects(
+    config_path: dict | str | Path | None = None,
+) -> list[Strategy]:
     """Resolve strategy templates + underlying profiles into runtime Strategy objects.
 
     Falls back to the legacy strategies.yaml if the new config files don't exist or
@@ -455,7 +475,9 @@ def _load_idea_approval_overlay(config: dict) -> dict[str, Any]:
         from vol_crush.sheets.sync import read_idea_approvals_cache
     except ImportError:
         return {}
-    return {row.idea_id: row for row in read_idea_approvals_cache(config) if row.idea_id}
+    return {
+        row.idea_id: row for row in read_idea_approvals_cache(config) if row.idea_id
+    }
 
 
 def _load_sheet_trade_ideas(config: dict) -> list[TradeIdea]:
@@ -474,7 +496,9 @@ def _load_sheet_trade_ideas(config: dict) -> list[TradeIdea]:
             continue
         if not row.underlying or not (row.proposed_strategy or row.strategy_type):
             continue
-        strategy_type = canonical_strategy_type(row.proposed_strategy or row.strategy_type)
+        strategy_type = canonical_strategy_type(
+            row.proposed_strategy or row.strategy_type
+        )
         note = row.note or row.description or row.operator_notes
         expectation = f"{row.expectation} expectation. " if row.expectation else ""
         rationale = row.rationale or note
@@ -514,7 +538,9 @@ def _filter_ideas_for_execution(ideas, config: dict):
         return list(ideas), []
 
     overlay = _load_idea_approval_overlay(config)
-    auto_approve = bool((config.get("execution") or {}).get("auto_approve_ideas", False))
+    auto_approve = bool(
+        (config.get("execution") or {}).get("auto_approve_ideas", False)
+    )
     kept: list = []
     notes: list[str] = []
     for idea in ideas:
@@ -624,7 +650,9 @@ def _pick_option(
         if item.option_type == option_type
     ]
     if expiration:
-        matching_expiration = [item for item in options if item.expiration == expiration]
+        matching_expiration = [
+            item for item in options if item.expiration == expiration
+        ]
         if matching_expiration:
             options = matching_expiration
     if not options:
@@ -1283,11 +1311,33 @@ def build_trade_plan(
     approval_notes = approval_notes + idea_approval_notes
     snapshots = provider.list_market_snapshots()
     regime, policy = _resolve_regime(config, snapshots)
+    if _execution_mode(dict(config)) == "shadow":
+        from vol_crush.intelligence.candidates import generate_agent_trade_ideas
+
+        agent_ideas = generate_agent_trade_ideas(
+            config,
+            strategies=strategies,
+            provider=provider,
+            regime=regime,
+            policy=policy,
+        )
+        if agent_ideas:
+            existing_ids = {idea.id for idea in ideas}
+            ideas.extend(idea for idea in agent_ideas if idea.id not in existing_ids)
+            approval_notes.append(
+                f"agent candidates added in shadow mode: {len(agent_ideas)}"
+            )
     candidates, notes = validate_trade_ideas(
         ideas, strategies, provider, policy, regime=regime
     )
     notes = approval_notes + notes
-    base_snapshot = _apply_shadow_nlv_override(build_portfolio_snapshot(store), config)
+    if _execution_mode(dict(config)) == "shadow":
+        from vol_crush.shadow.service import build_shadow_portfolio_snapshot
+
+        base_snapshot = build_shadow_portfolio_snapshot(store, config)
+    else:
+        base_snapshot = build_portfolio_snapshot(store)
+    base_snapshot = _apply_shadow_nlv_override(base_snapshot, config)
 
     plan_id = f"plan_{uuid.uuid4().hex[:10]}"
     if not candidates:

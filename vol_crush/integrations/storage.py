@@ -12,11 +12,18 @@ from vol_crush.core.interfaces import StorageBackend
 from vol_crush.core.models import (
     BacktestResult,
     BrokerPositionLeg,
+    IdeaCandidate,
     PendingOrder,
+    PlaybookInsight,
+    PolicyProposal,
     PortfolioSnapshot,
     Position,
     RawSourceDocument,
+    ReflectionSummary,
     ReplayTrade,
+    ShadowFill,
+    SourceIntelligence,
+    SourceObservation,
     TradeIdea,
     TradePlan,
     serialize_value,
@@ -67,6 +74,20 @@ class LocalStore(StorageBackend):
                     status TEXT NOT NULL,
                     payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS shadow_positions (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS shadow_fills (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS shadow_portfolio_snapshots (
+                    id TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS broker_position_legs (
                     id TEXT PRIMARY KEY,
                     broker TEXT NOT NULL,
@@ -98,6 +119,36 @@ class LocalStore(StorageBackend):
                 );
                 CREATE TABLE IF NOT EXISTS fixtures (
                     id TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS source_observations (
+                    id TEXT PRIMARY KEY,
+                    source_name TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS idea_candidates (
+                    id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS playbook_insights (
+                    id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS source_intelligence (
+                    id TEXT PRIMARY KEY,
+                    updated_at TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS policy_proposals (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS reflection_summaries (
+                    id TEXT PRIMARY KEY,
+                    generated_at TEXT NOT NULL,
                     payload TEXT NOT NULL
                 );
                 """)
@@ -194,6 +245,52 @@ class LocalStore(StorageBackend):
             rows = conn.execute(query, params).fetchall()
         return [Position.from_dict(json.loads(row["payload"])) for row in rows]
 
+    def save_shadow_positions(self, positions: list[Position]) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM shadow_positions")
+            conn.executemany(
+                "INSERT INTO shadow_positions VALUES (?, ?, ?)",
+                [
+                    (
+                        position.position_id,
+                        position.status,
+                        json.dumps(position.to_dict()),
+                    )
+                    for position in positions
+                ],
+            )
+        self._write_audit(
+            "shadow_positions",
+            [position.to_dict() for position in self.list_shadow_positions()],
+        )
+
+    def list_shadow_positions(self, status: str | None = None) -> list[Position]:
+        query = "SELECT payload FROM shadow_positions"
+        params: tuple[Any, ...] = ()
+        if status:
+            query += " WHERE status = ?"
+            params = (status,)
+        query += " ORDER BY id"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [Position.from_dict(json.loads(row["payload"])) for row in rows]
+
+    def save_shadow_fills(self, fills: list[ShadowFill]) -> None:
+        rows = [
+            (fill.fill_id, fill.action, json.dumps(fill.to_dict())) for fill in fills
+        ]
+        self._upsert_many("shadow_fills", rows)
+        self._write_audit(
+            "shadow_fills", [fill.to_dict() for fill in self.list_shadow_fills()]
+        )
+
+    def list_shadow_fills(self) -> list[ShadowFill]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM shadow_fills ORDER BY id"
+            ).fetchall()
+        return [ShadowFill.from_dict(json.loads(row["payload"])) for row in rows]
+
     def replace_broker_legs(self, broker: str, legs: list[BrokerPositionLeg]) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM broker_position_legs WHERE broker = ?", (broker,))
@@ -246,6 +343,32 @@ class LocalStore(StorageBackend):
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT payload FROM portfolio_snapshots ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return PortfolioSnapshot.from_dict(json.loads(row["payload"]))
+
+    def save_shadow_portfolio_snapshot(self, snapshot: PortfolioSnapshot) -> None:
+        payload = json.dumps(snapshot.to_dict())
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO shadow_portfolio_snapshots VALUES (?, ?)",
+                (snapshot.timestamp or "latest", payload),
+            )
+        items = [item.to_dict() for item in self.list_shadow_portfolio_snapshots()]
+        self._write_audit("shadow_portfolio_snapshots", items)
+
+    def list_shadow_portfolio_snapshots(self) -> list[PortfolioSnapshot]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM shadow_portfolio_snapshots ORDER BY id"
+            ).fetchall()
+        return [PortfolioSnapshot.from_dict(json.loads(row["payload"])) for row in rows]
+
+    def get_latest_shadow_portfolio_snapshot(self) -> PortfolioSnapshot | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM shadow_portfolio_snapshots ORDER BY id DESC LIMIT 1"
             ).fetchone()
         if row is None:
             return None
@@ -345,6 +468,144 @@ class LocalStore(StorageBackend):
                 "SELECT payload FROM replay_trades ORDER BY id"
             ).fetchall()
         return [ReplayTrade.from_dict(json.loads(row["payload"])) for row in rows]
+
+    def save_source_observations(self, observations: list[SourceObservation]) -> None:
+        rows = [
+            (
+                item.observation_id,
+                item.source_name,
+                json.dumps(item.to_dict()),
+            )
+            for item in observations
+        ]
+        self._upsert_many("source_observations", rows)
+        self._write_audit(
+            "source_observations",
+            [item.to_dict() for item in self.list_source_observations()],
+        )
+
+    def list_source_observations(self) -> list[SourceObservation]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM source_observations ORDER BY id"
+            ).fetchall()
+        return [SourceObservation.from_dict(json.loads(row["payload"])) for row in rows]
+
+    def save_idea_candidates(self, candidates: list[IdeaCandidate]) -> None:
+        rows = [
+            (
+                item.candidate_id,
+                item.source_id,
+                json.dumps(item.to_dict()),
+            )
+            for item in candidates
+        ]
+        self._upsert_many("idea_candidates", rows)
+        self._write_audit(
+            "idea_candidates",
+            [item.to_dict() for item in self.list_idea_candidates()],
+        )
+
+    def list_idea_candidates(self) -> list[IdeaCandidate]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM idea_candidates ORDER BY id"
+            ).fetchall()
+        return [IdeaCandidate.from_dict(json.loads(row["payload"])) for row in rows]
+
+    def save_playbook_insights(self, insights: list[PlaybookInsight]) -> None:
+        rows = [
+            (
+                item.insight_id,
+                item.source_id,
+                json.dumps(item.to_dict()),
+            )
+            for item in insights
+        ]
+        self._upsert_many("playbook_insights", rows)
+        self._write_audit(
+            "playbook_insights",
+            [item.to_dict() for item in self.list_playbook_insights()],
+        )
+
+    def list_playbook_insights(self) -> list[PlaybookInsight]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM playbook_insights ORDER BY id"
+            ).fetchall()
+        return [PlaybookInsight.from_dict(json.loads(row["payload"])) for row in rows]
+
+    def save_source_intelligence(self, items: list[SourceIntelligence]) -> None:
+        rows = [
+            (
+                item.source_name,
+                item.updated_at,
+                json.dumps(item.to_dict()),
+            )
+            for item in items
+        ]
+        self._upsert_many("source_intelligence", rows)
+        self._write_audit(
+            "source_intelligence",
+            [item.to_dict() for item in self.list_source_intelligence()],
+        )
+
+    def list_source_intelligence(self) -> list[SourceIntelligence]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM source_intelligence ORDER BY id"
+            ).fetchall()
+        return [
+            SourceIntelligence.from_dict(json.loads(row["payload"])) for row in rows
+        ]
+
+    def save_policy_proposals(self, proposals: list[PolicyProposal]) -> None:
+        rows = [
+            (
+                item.proposal_id,
+                item.status,
+                json.dumps(item.to_dict()),
+            )
+            for item in proposals
+        ]
+        self._upsert_many("policy_proposals", rows)
+        self._write_audit(
+            "policy_proposals",
+            [item.to_dict() for item in self.list_policy_proposals()],
+        )
+
+    def list_policy_proposals(self) -> list[PolicyProposal]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM policy_proposals ORDER BY id"
+            ).fetchall()
+        return [PolicyProposal.from_dict(json.loads(row["payload"])) for row in rows]
+
+    def save_reflection_summaries(self, summaries: list[ReflectionSummary]) -> None:
+        rows = [
+            (
+                item.summary_id,
+                item.generated_at,
+                json.dumps(item.to_dict()),
+            )
+            for item in summaries
+        ]
+        with self._connect() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO reflection_summaries VALUES (?, ?, ?)",
+                rows,
+            )
+        self._write_audit(
+            "reflection_summaries",
+            [item.to_dict() for item in self.list_reflection_summaries()],
+        )
+
+    def list_reflection_summaries(self) -> list[ReflectionSummary]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM reflection_summaries ORDER BY id"
+            ).fetchall()
+        return [ReflectionSummary.from_dict(json.loads(row["payload"])) for row in rows]
 
 
 def build_local_store(config: dict[str, Any]) -> LocalStore:

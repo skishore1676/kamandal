@@ -53,17 +53,14 @@ def test_dedupe_documents_queues_stored_unextracted_duplicate():
 
 def _build_feed_xml(entries):
     """Tiny helper — assemble a multi-entry Atom feed for tests."""
-    body = "".join(
-        f"""
+    body = "".join(f"""
         <entry>
           <yt:videoId>{e['video_id']}</yt:videoId>
           <title>{e['title']}</title>
           <published>{e.get('published', '2026-04-02T14:00:00+00:00')}</published>
           <author><name>{e.get('author', 'Trader A')}</name></author>
         </entry>
-        """
-        for e in entries
-    )
+        """ for e in entries)
     return (
         '<feed xmlns="http://www.w3.org/2005/Atom" '
         'xmlns:yt="http://www.youtube.com/xml/schemas/2015">' + body + "</feed>"
@@ -92,14 +89,12 @@ def _install_fake_transcript_api(monkeypatch, mapping):
 
 
 def test_youtube_adapter_extracts_transcript(monkeypatch):
-    feed_xml = _build_feed_xml(
-        [{"video_id": "abc123", "title": "SPY short put idea"}]
-    )
+    feed_xml = _build_feed_xml([{"video_id": "abc123", "title": "SPY short put idea"}])
 
     def fake_fetch(url, timeout=15, max_attempts=3):
         if "feeds/videos.xml" in url:
             return feed_xml
-        return "<html><body>\"shortDescription\":\"Selling the SPY put here\"</body></html>"
+        return '<html><body>"shortDescription":"Selling the SPY put here"</body></html>'
 
     monkeypatch.setattr("vol_crush.idea_sources.adapters.safe_fetch_url", fake_fetch)
     _install_fake_transcript_api(
@@ -122,7 +117,9 @@ def test_youtube_adapter_title_filter_include(monkeypatch):
     )
     monkeypatch.setattr(
         "vol_crush.idea_sources.adapters.safe_fetch_url",
-        lambda url, timeout=15, max_attempts=3: feed_xml if "feeds/videos.xml" in url else "",
+        lambda url, timeout=15, max_attempts=3: (
+            feed_xml if "feeds/videos.xml" in url else ""
+        ),
     )
     _install_fake_transcript_api(monkeypatch, {"v1": ["Sell strangle"], "v2": ["Doom"]})
 
@@ -143,7 +140,9 @@ def test_youtube_adapter_title_filter_exclude(monkeypatch):
     )
     monkeypatch.setattr(
         "vol_crush.idea_sources.adapters.safe_fetch_url",
-        lambda url, timeout=15, max_attempts=3: feed_xml if "feeds/videos.xml" in url else "",
+        lambda url, timeout=15, max_attempts=3: (
+            feed_xml if "feeds/videos.xml" in url else ""
+        ),
     )
     _install_fake_transcript_api(monkeypatch, {"v1": ["Interview"], "v2": ["Sell"]})
 
@@ -406,4 +405,100 @@ def test_run_source_fetch_transcripts_saves_raw_documents(tmp_path, monkeypatch)
     assert len(documents) == 1
     assert ideas == []
     assert len(store.list_raw_documents()) == 1
+    observations = store.list_source_observations()
+    scorecards = store.list_source_intelligence()
+    assert len(observations) == 1
+    assert observations[0].source_name == "local_transcripts"
+    assert observations[0].lane_assignment == ["noise"]
+    assert len(scorecards) == 1
+    assert scorecards[0].source_name == "local_transcripts"
+    assert scorecards[0].sample_size == 1
     assert any("fetched" in note for note in notes)
+
+
+def test_record_intake_artifacts_promotes_candidates_and_playbook(tmp_path):
+    from vol_crush.core.models import TradeIdea
+    from vol_crush.intelligence.service import record_intake_artifacts
+
+    store = LocalStore(
+        sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit"
+    )
+    doc = RawSourceDocument(
+        document_id="doc1",
+        source_type=SourceType.YOUTUBE.value,
+        source_name="youtube:ch",
+        title="SPY idea",
+        url="https://example.com/video",
+        text="Sell the SPY put. Prefer defined-risk spreads in low IV.",
+    )
+    idea = TradeIdea(
+        id="idea_1",
+        date="2026-04-25",
+        trader_name="Trader",
+        show_name="Show",
+        underlying="SPY",
+        strategy_type="short_put",
+        description="Sell a SPY short put",
+        rationale="IV elevated",
+        confidence="high",
+        source_url="https://example.com/video",
+    )
+    summary = {
+        "headline": "Short premium remains attractive.",
+        "vol_view": "IV rank elevated.",
+        "strategies_discussed": ["short_put"],
+        "actionable_ideas_present": True,
+    }
+
+    observations, candidates, insights = record_intake_artifacts(
+        store,
+        [doc],
+        [idea],
+        summaries_by_document_id={"doc1": summary},
+    )
+
+    assert len(observations) == 1
+    assert observations[0].lane_assignment == ["trade_idea", "operator_digest"]
+    assert observations[0].idea_count == 1
+    assert len(candidates) == 1
+    assert candidates[0].promotable is True
+    assert candidates[0].promoted_to_idea_review is True
+    assert insights == []
+    assert store.list_source_intelligence()[0].idea_rate == 1.0
+
+
+def test_record_intake_artifacts_captures_playbook_without_trade_idea(tmp_path):
+    from vol_crush.intelligence.service import record_intake_artifacts
+
+    store = LocalStore(
+        sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit"
+    )
+    doc = RawSourceDocument(
+        document_id="doc_playbook",
+        source_type=SourceType.YOUTUBE.value,
+        source_name="youtube:education",
+        title="When to use put spreads",
+        url="https://example.com/playbook",
+        text="Use defined risk when implied volatility is low.",
+    )
+    summary = {
+        "headline": "Defined risk is preferable when premium is thin.",
+        "vol_view": "Low IV makes undefined-risk premium less attractive.",
+        "strategies_discussed": ["put_spread", "iron_condor"],
+        "actionable_ideas_present": False,
+    }
+
+    observations, candidates, insights = record_intake_artifacts(
+        store,
+        [doc],
+        [],
+        summaries_by_document_id={"doc_playbook": summary},
+    )
+
+    assert candidates == []
+    assert len(insights) == 1
+    assert "Defined risk" in insights[0].lesson
+    assert observations[0].lane_assignment == ["operator_digest", "playbook"]
+    scorecard = store.list_source_intelligence()[0]
+    assert scorecard.playbook_rate == 1.0
+    assert scorecard.current_intake_priority == "high"

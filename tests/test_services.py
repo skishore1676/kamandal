@@ -28,8 +28,11 @@ from vol_crush.executor.service import (
 )
 from vol_crush.integrations.fixtures import FixtureMarketDataProvider
 from vol_crush.integrations.storage import LocalStore
+from vol_crush.main import _position_to_sheet_row
 from vol_crush.optimizer.service import build_trade_plan
 from vol_crush.position_manager import service as position_manager_service
+from vol_crush.reflection.service import run_reflection
+from vol_crush.shadow.service import record_shadow_fills_for_orders
 
 
 def _sample_config(tmp_path):
@@ -290,6 +293,58 @@ def test_optimizer_builds_executable_trade_plan(tmp_path, monkeypatch):
     assert plan.decision == PlanDecision.EXECUTE
     assert plan.selected_combo_ids == ["idea_spy_put"]
     assert plan.ranked_combos
+
+
+def test_optimizer_adds_agent_candidates_only_in_shadow(tmp_path, monkeypatch):
+    config = _sample_config(tmp_path)
+    config["execution"] = {"mode": "shadow", "shadow_net_liquidation_value": 100000.0}
+    config["portfolio"]["constraints"]["max_single_underlying_pct"] = 100.0
+    config["intelligence"] = {
+        "agent_candidates": {
+            "enabled": True,
+            "max_candidates": 1,
+            "allowed_structures": ["short_put"],
+        }
+    }
+    store = LocalStore(
+        sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit"
+    )
+    provider = FixtureMarketDataProvider(_sample_bundle(tmp_path))
+    strategies = [
+        Strategy.from_dict(
+            {
+                "id": "spy_put",
+                "name": "SPY Short Put",
+                "structure": "short_put",
+                "filters": {
+                    "underlyings": ["SPY"],
+                    "iv_rank_min": 20,
+                    "dte_range": [30, 45],
+                    "delta_range": [0.14, 0.2],
+                },
+                "allowed_regimes": ["normal_iv"],
+                "management": {"profit_target_pct": 50},
+            }
+        )
+    ]
+    monkeypatch.setattr(
+        "vol_crush.optimizer.service.load_strategy_objects", lambda: strategies
+    )
+
+    plan = build_trade_plan(store, config, provider)
+
+    assert plan.decision == PlanDecision.EXECUTE
+    assert len(plan.candidate_positions) == 1
+    assert plan.candidate_positions[0].idea_id.startswith("agent_")
+    assert plan.candidate_positions[0].underlying == "SPY"
+    assert any("agent candidates added" in flag for flag in plan.risk_flags)
+
+    live_config = dict(config)
+    live_config["execution"] = {"mode": "live"}
+    live_plan = build_trade_plan(store, live_config, provider)
+
+    assert live_plan.decision == PlanDecision.NO_TRADE
+    assert not live_plan.candidate_positions
 
 
 def test_optimizer_prefers_option_near_target_delta(tmp_path, monkeypatch):
@@ -814,6 +869,202 @@ def test_shadow_order_reconcile_supersedes_older_same_thesis() -> None:
     assert superseded[0].status == OrderStatus.CANCELLED.value
     assert superseded[0].broker_status == "SUPERSEDED"
     assert "pending_new" in superseded[0].notes
+
+
+def test_shadow_preflight_records_fill_and_position(tmp_path):
+    config = _sample_config(tmp_path)
+    config["execution"] = {
+        "mode": "shadow",
+        "shadow_net_liquidation_value": 50000.0,
+    }
+    store = LocalStore(
+        sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit"
+    )
+    order = PendingOrder(
+        pending_order_id="pending_1",
+        plan_id="plan_1",
+        idea_id="idea_1",
+        created_at="2026-04-21T13:40:21+00:00",
+        action=TradeAction.OPEN,
+        status=OrderStatus.PENDING.value,
+        underlying="QQQ",
+        strategy_id="short_put_conservative:index_etf",
+        strategy_type="short_put",
+        quantity=1,
+        target_price=0.52,
+        estimated_credit=52.0,
+        estimated_bpr=7100.0,
+        greeks_impact=Greeks(delta=-0.16, theta=0.09),
+        legs=[OptionLeg("QQQ", "2026-05-29", 604.0, "put", "sell", 1)],
+        broker="public",
+        execution_mode="shadow",
+        broker_order_id="shadow_anchor_1",
+        broker_status="PREFLIGHT_OK",
+        broker_response={"buyingPowerRequirement": "7000.00"},
+    )
+
+    fills = record_shadow_fills_for_orders(store, [order], config)
+    duplicate_fills = record_shadow_fills_for_orders(store, [order], config)
+    positions = store.list_shadow_positions()
+    snapshot = store.get_latest_shadow_portfolio_snapshot()
+
+    assert len(fills) == 1
+    assert duplicate_fills == []
+    assert order.status == OrderStatus.FILLED.value
+    assert "Shadow fill assumed" in order.notes
+    assert fills[0].estimated_bpr == 7000.0
+    assert len(positions) == 1
+    assert positions[0].source == "shadow"
+    assert positions[0].strategy_type == "short_put"
+    assert positions[0].bpr == 7000.0
+    assert snapshot is not None
+    assert snapshot.net_liquidation_value == 50000.0
+    assert snapshot.position_count == 1
+    assert snapshot.bpr_used == 7000.0
+
+
+def test_position_sheet_row_summarizes_group():
+    position = Position(
+        position_id="pos_1",
+        group_id="group_1",
+        underlying="SPY",
+        strategy_id="put_spread_standard:index_etf",
+        strategy_type="put_spread",
+        legs=[
+            OptionLeg("SPY", "2026-05-15", 480.0, "put", "sell", 1),
+            OptionLeg("SPY", "2026-05-15", 475.0, "put", "buy", 1),
+        ],
+        open_date="2026-04-25",
+        open_credit=5.0,
+        current_value=2.0,
+        greeks=Greeks(delta=0.05, theta=0.02),
+        bpr=500.0,
+        source="shadow",
+        quantity=1,
+        management_status="auto",
+    )
+
+    row = _position_to_sheet_row(position)
+
+    assert row.group_id == "group_1"
+    assert row.strategy_type == "put_spread"
+    assert row.underlying == "SPY"
+    assert "SELL 1 SPY 2026-05-15 480P" in row.legs_summary
+    assert row.expiration == "2026-05-15"
+    assert row.net_delta == 0.05
+    assert row.pnl_unrealized == 3.0
+    assert row.source == "shadow"
+
+
+def test_reflection_links_candidates_orders_and_shadow_fills(tmp_path):
+    from vol_crush.core.models import (
+        IdeaCandidate,
+        SourceIntelligence,
+        SourceObservation,
+    )
+
+    config = _sample_config(tmp_path)
+    store = LocalStore(
+        sqlite_path=tmp_path / "vol_crush.db", audit_dir=tmp_path / "audit"
+    )
+    observed_at = "2026-04-25T12:00:00+00:00"
+    store.save_source_observations(
+        [
+            SourceObservation(
+                observation_id="srcobs_1",
+                source_id="doc_1",
+                observed_at=observed_at,
+                source_type="youtube",
+                source_name="youtube:ch",
+                title="SPY idea",
+                actionable_ideas_present=True,
+                idea_count=1,
+            )
+        ]
+    )
+    store.save_idea_candidates(
+        [
+            IdeaCandidate(
+                candidate_id="ideacand_1",
+                idea_id="idea_1",
+                source_id="doc_1",
+                observed_at=observed_at,
+                underlying="SPY",
+                strategy_type="short_put",
+                promotable=True,
+            )
+        ]
+    )
+    store.save_source_intelligence(
+        [
+            SourceIntelligence(
+                source_name="youtube:ch",
+                updated_at=observed_at,
+                sample_size=1,
+                idea_rate=1.0,
+            )
+        ]
+    )
+    plan = TradePlan(
+        plan_id="plan_1",
+        created_at=observed_at,
+        decision=PlanDecision.EXECUTE,
+        regime=MarketRegime.NORMAL_IV.value,
+        selected_combo_ids=["idea_1"],
+        candidate_positions=[
+            CandidatePosition(
+                idea_id="idea_1",
+                strategy_id="spy_put",
+                underlying="SPY",
+                strategy_type="short_put",
+                expiration="2026-05-15",
+                estimated_credit=1.0,
+                estimated_bpr=1000.0,
+                estimated_greeks=Greeks(theta=0.1),
+            )
+        ],
+    )
+    store.save_trade_plan(plan)
+    order = PendingOrder(
+        pending_order_id="pending_1",
+        plan_id="plan_1",
+        idea_id="idea_1",
+        created_at=observed_at,
+        action=TradeAction.OPEN,
+        status=OrderStatus.FILLED.value,
+        underlying="SPY",
+        strategy_id="spy_put",
+        quantity=1,
+        target_price=1.0,
+        estimated_credit=100.0,
+        estimated_bpr=1000.0,
+        greeks_impact=Greeks(theta=0.1),
+        execution_mode="shadow",
+        broker_status="PREFLIGHT_OK",
+    )
+    store.save_pending_orders([order])
+    fills = record_shadow_fills_for_orders(store, [order], config)
+    assert fills == []
+    order.status = OrderStatus.PENDING.value
+    store.save_pending_orders([order])
+    fills = record_shadow_fills_for_orders(store, [order], config)
+    assert len(fills) == 1
+
+    summary = run_reflection(config, store=store)
+    scorecard = store.list_source_intelligence()[0]
+
+    assert summary.source_observation_count == 1
+    assert summary.idea_candidate_count == 1
+    assert summary.trade_plan_count == 1
+    assert summary.pending_order_count == 1
+    assert summary.preflight_ok_count == 1
+    assert summary.shadow_fill_count == 1
+    assert summary.selected_idea_ids == ["idea_1"]
+    assert summary.ordered_idea_ids == ["idea_1"]
+    assert summary.shadow_filled_idea_ids == ["idea_1"]
+    assert scorecard.plan_conversion_rate == 1.0
+    assert scorecard.order_conversion_rate == 1.0
+    assert store.list_reflection_summaries()[0].summary_id == summary.summary_id
 
 
 def test_latest_trade_plan_uses_created_at_not_random_id() -> None:

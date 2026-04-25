@@ -30,7 +30,7 @@ class AuthorizationMode(str, Enum):
 
 
 class IdeaApproval(str, Enum):
-    PENDING = ""         # default when the row is first written
+    PENDING = ""  # default when the row is first written
     APPROVED = "approve"
     REJECTED = "reject"
     HOLD = "hold"
@@ -126,9 +126,7 @@ class StrategyApprovalRow:
             row_id=str(normalized.get("row_id") or "").strip(),
             strategy_id=normalize_key(
                 str(
-                    normalized.get("strategy_id")
-                    or normalized.get("template_id")
-                    or ""
+                    normalized.get("strategy_id") or normalized.get("template_id") or ""
                 )
             ),
             enabled=coerce_bool(normalized.get("enabled"), default=False),
@@ -147,9 +145,7 @@ class StrategyApprovalRow:
             backtest_approved=coerce_bool(
                 normalized.get("backtest_approved"), default=False
             ),
-            dry_run_passed=coerce_bool(
-                normalized.get("dry_run_passed"), default=False
-            ),
+            dry_run_passed=coerce_bool(normalized.get("dry_run_passed"), default=False),
             max_bpr_pct_override=_parse_optional_float(
                 normalized.get("max_bpr_pct_override")
             ),
@@ -308,7 +304,9 @@ class IdeaReviewRow:
                 or ""
             )
         )
-        note = str(normalized.get("note") or normalized.get("description") or "").strip()
+        note = str(
+            normalized.get("note") or normalized.get("description") or ""
+        ).strip()
         idea_id = str(normalized.get("idea_id") or "").strip()
         if not idea_id:
             idea_id = _derived_idea_id(date, underlying, proposed_strategy, note)
@@ -705,16 +703,20 @@ class TemplateLibraryRow:
             "" if self.delta_min is None else self.delta_min,
             "" if self.delta_max is None else self.delta_max,
             "" if self.spread_width is None else self.spread_width,
-            ""
-            if self.min_credit_to_width_ratio is None
-            else self.min_credit_to_width_ratio,
+            (
+                ""
+                if self.min_credit_to_width_ratio is None
+                else self.min_credit_to_width_ratio
+            ),
             "" if self.profit_target_pct is None else self.profit_target_pct,
             "" if self.max_loss_multiple is None else self.max_loss_multiple,
             "" if self.roll_dte_trigger is None else self.roll_dte_trigger,
             "" if self.roll_for_credit is None else as_bool_cell(self.roll_for_credit),
-            ""
-            if self.close_before_expiration is None
-            else as_bool_cell(self.close_before_expiration),
+            (
+                ""
+                if self.close_before_expiration is None
+                else as_bool_cell(self.close_before_expiration)
+            ),
             "" if self.avoid_earnings is None else as_bool_cell(self.avoid_earnings),
             self.identity_key(),
         ]
@@ -772,7 +774,11 @@ class ProfileConfigRow:
             "" if self.max_bpr_pct is None else self.max_bpr_pct,
             "" if self.max_per_position_pct is None else self.max_per_position_pct,
             "" if self.max_positions is None else self.max_positions,
-            "" if self.earnings_sensitive is None else as_bool_cell(self.earnings_sensitive),
+            (
+                ""
+                if self.earnings_sensitive is None
+                else as_bool_cell(self.earnings_sensitive)
+            ),
             self.identity_key(),
         ]
 
@@ -879,6 +885,128 @@ class PositionRow:
             self.source,
             self.opened_at,
             self.days_open,
+        ]
+
+
+@dataclass
+class SourceIntelligenceRow:
+    """Source quality scorecard for the cockpit."""
+
+    HEADER: Sequence[str] = field(
+        default=(
+            "source_name",
+            "sample_size",
+            "idea_rate",
+            "digest_rate",
+            "playbook_rate",
+            "plan_conversion_rate",
+            "order_conversion_rate",
+            "false_positive_rate",
+            "current_intake_priority",
+            "operator_rating",
+            "updated_at",
+        ),
+        repr=False,
+    )
+
+    source_name: str = ""
+    sample_size: int = 0
+    idea_rate: float = 0.0
+    digest_rate: float = 0.0
+    playbook_rate: float = 0.0
+    plan_conversion_rate: float = 0.0
+    order_conversion_rate: float = 0.0
+    false_positive_rate: float = 0.0
+    current_intake_priority: str = ""
+    operator_rating: str = ""
+    updated_at: str = ""
+
+    def to_row(self) -> list[Any]:
+        return [
+            self.source_name,
+            self.sample_size,
+            self.idea_rate,
+            self.digest_rate,
+            self.playbook_rate,
+            self.plan_conversion_rate,
+            self.order_conversion_rate,
+            self.false_positive_rate,
+            self.current_intake_priority,
+            self.operator_rating,
+            self.updated_at,
+        ]
+
+
+@dataclass
+class ReflectionSummaryRow:
+    """One deterministic reflection summary for the cockpit."""
+
+    HEADER: Sequence[str] = field(
+        default=(
+            "summary_id",
+            "generated_at",
+            "window_start",
+            "window_end",
+            "source_observations",
+            "idea_candidates",
+            "promotable_candidates",
+            "playbook_insights",
+            "trade_plans",
+            "execute_plans",
+            "pending_orders",
+            "preflight_ok",
+            "shadow_fills",
+            "selected_ideas",
+            "ordered_ideas",
+            "shadow_filled_ideas",
+            "high_value_sources",
+            "noisy_sources",
+            "notes",
+        ),
+        repr=False,
+    )
+
+    summary_id: str = ""
+    generated_at: str = ""
+    window_start: str = ""
+    window_end: str = ""
+    source_observations: int = 0
+    idea_candidates: int = 0
+    promotable_candidates: int = 0
+    playbook_insights: int = 0
+    trade_plans: int = 0
+    execute_plans: int = 0
+    pending_orders: int = 0
+    preflight_ok: int = 0
+    shadow_fills: int = 0
+    selected_ideas: list[str] = field(default_factory=list)
+    ordered_ideas: list[str] = field(default_factory=list)
+    shadow_filled_ideas: list[str] = field(default_factory=list)
+    high_value_sources: list[str] = field(default_factory=list)
+    noisy_sources: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def to_row(self) -> list[Any]:
+        return [
+            self.summary_id,
+            self.generated_at,
+            self.window_start,
+            self.window_end,
+            self.source_observations,
+            self.idea_candidates,
+            self.promotable_candidates,
+            self.playbook_insights,
+            self.trade_plans,
+            self.execute_plans,
+            self.pending_orders,
+            self.preflight_ok,
+            self.shadow_fills,
+            ", ".join(self.selected_ideas),
+            ", ".join(self.ordered_ideas),
+            ", ".join(self.shadow_filled_ideas),
+            ", ".join(self.high_value_sources),
+            ", ".join(self.noisy_sources),
+            " | ".join(self.notes),
         ]
 
 

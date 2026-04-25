@@ -35,6 +35,7 @@ from vol_crush.idea_sources.transcript_archive import (
     purge_older_than,
     write_transcript,
 )
+from vol_crush.intelligence.service import record_intake_artifacts
 from vol_crush.integrations.llm import build_llm_client
 from vol_crush.integrations.storage import build_local_store
 from vol_crush.transcript_providers import build_chain as build_transcript_chain
@@ -232,6 +233,7 @@ def run_source_fetch(
         )
 
     if not extract_ideas:
+        record_intake_artifacts(store, kept, ideas)
         return kept, ideas, notes
     if not extraction_documents:
         return extraction_documents, ideas, notes
@@ -240,12 +242,16 @@ def run_source_fetch(
         llm = build_llm_client(config)
     except RuntimeError as exc:
         notes.append(f"{exc}; raw documents saved but idea extraction skipped.")
+        record_intake_artifacts(store, extraction_documents, ideas)
         return extraction_documents, ideas, notes
 
     # Summaries first — one LLM call per new transcript, saved to disk for
     # human review regardless of whether actionable ideas get extracted.
+    summaries_by_document_id = {}
     if generate_summaries:
-        _run_summary_pass(llm, extraction_documents, summaries_root, notes)
+        summaries_by_document_id = _run_summary_pass(
+            llm, extraction_documents, summaries_root, notes
+        )
 
     ideas = extract_ideas_from_raw_documents(llm, extraction_documents)
     unique_new_ideas = _new_unique_ideas(store.list_trade_ideas(), ideas)
@@ -256,6 +262,18 @@ def run_source_fetch(
         for idea in unique_new_ideas:
             idea.status = IdeaStatus.NEW.value
         store.save_trade_ideas(unique_new_ideas)
+    observations, candidates, insights = record_intake_artifacts(
+        store,
+        extraction_documents,
+        unique_new_ideas,
+        summaries_by_document_id=summaries_by_document_id,
+    )
+    notes.append(
+        "intelligence artifacts: "
+        f"{len(observations)} source_observations, "
+        f"{len(candidates)} idea_candidates, "
+        f"{len(insights)} playbook_insights"
+    )
     logger.info(
         "Extracted %d ideas from %d documents (%d unique after dedupe)",
         len(ideas),
@@ -270,7 +288,8 @@ def _run_summary_pass(
     documents: list[RawSourceDocument],
     summaries_root: Path,
     notes: list[str],
-) -> None:
+) -> dict[str, dict]:
+    summaries_by_document_id: dict[str, dict] = {}
     for document in documents:
         text = (document.text or "").strip()
         if not text:
@@ -287,7 +306,9 @@ def _run_summary_pass(
                 source_title=document.title,
                 author=document.author,
             )
-        except Exception as exc:  # noqa: BLE001 — any model/network failure is non-fatal here
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 — any model/network failure is non-fatal here
             notes.append(
                 f"summary failed for {document.document_id}: {type(exc).__name__}: {exc}"
             )
@@ -295,6 +316,7 @@ def _run_summary_pass(
                 "summary generation failed for %s: %s", document.document_id, exc
             )
             continue
+        summaries_by_document_id[document.document_id] = summary
         try:
             write_summary(
                 summaries_root,
@@ -303,9 +325,8 @@ def _run_summary_pass(
                 model=f"{llm.provider}:{llm.model}",
             )
         except OSError as exc:
-            notes.append(
-                f"summary write failed for {document.document_id}: {exc}"
-            )
+            notes.append(f"summary write failed for {document.document_id}: {exc}")
+    return summaries_by_document_id
 
 
 def main() -> None:
