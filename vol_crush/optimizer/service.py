@@ -72,22 +72,24 @@ def _sheet_template_overrides(
 ) -> list[StrategyTemplate]:
     if not (config.get("google_sheets") or {}).get("enabled", False):
         return base_templates
+    raw_cache_dir = (config.get("google_sheets") or {}).get("cache_dir")
+    cache_dir = Path(raw_cache_dir) if raw_cache_dir else get_data_dir() / "sheet_cache"
+    cache_exists = (cache_dir / "template_library.json").exists()
     try:
         from vol_crush.sheets.sync import read_template_library_cache
     except ImportError:
-        return base_templates
+        return [] if cache_exists else base_templates
 
     rows = read_template_library_cache(config)
     if not rows:
-        return base_templates
+        return [] if cache_exists else base_templates
 
     base_by_id = {template.id: template for template in base_templates}
     merged: list[StrategyTemplate] = []
-    seen: set[str] = set()
     for row in rows:
         if not row.template_id:
             continue
-        base = base_by_id.get(row.template_id)
+        base = None if cache_exists else base_by_id.get(row.template_id)
         if base is None:
             template = StrategyTemplate(
                 id=row.template_id,
@@ -149,11 +151,7 @@ def _sheet_template_overrides(
         if row.avoid_earnings is not None:
             template.avoid_earnings = row.avoid_earnings
         merged.append(template)
-        seen.add(template.id)
 
-    for template in base_templates:
-        if template.id not in seen:
-            merged.append(template)
     return merged
 
 

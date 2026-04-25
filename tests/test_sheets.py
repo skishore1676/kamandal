@@ -847,6 +847,75 @@ def test_load_strategy_objects_treats_existing_empty_sheet_cache_as_authoritativ
     assert load_strategy_objects(config) == []
 
 
+def test_load_strategy_objects_treats_template_cache_as_authoritative(tmp_path):
+    from vol_crush.optimizer.service import load_strategy_objects
+
+    cache_dir = tmp_path / "sheet_cache"
+    cache_dir.mkdir()
+    (cache_dir / "strategies.json").write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {
+                        "strategy_id": "short_put",
+                        "enabled": True,
+                        "authorization_mode": "shadow",
+                        "stock_profile": "index_etf",
+                    },
+                    {
+                        "strategy_id": "long_call",
+                        "enabled": True,
+                        "authorization_mode": "shadow",
+                        "stock_profile": "index_etf",
+                    },
+                ]
+            }
+        )
+    )
+    (cache_dir / "template_library.json").write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {
+                        "template_id": "short_put_conservative",
+                        "strategy_id": "short_put",
+                        "structure": "short_put",
+                    }
+                ]
+            }
+        )
+    )
+    (cache_dir / "profiles.json").write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {
+                        "stock_profile": "index_etf",
+                        "max_bpr_pct": 100,
+                        "max_per_position_pct": 100,
+                        "max_positions": 99,
+                    }
+                ]
+            }
+        )
+    )
+    (cache_dir / "universe.json").write_text(
+        json.dumps(
+            {"rows": [{"symbol": "SPY", "stock_profile": "index_etf", "enabled": True}]}
+        )
+    )
+    config = {
+        "google_sheets": {
+            "enabled": True,
+            "cache_dir": str(cache_dir),
+        }
+    }
+
+    strategies = load_strategy_objects(config)
+
+    assert [strategy.structure.value for strategy in strategies] == ["short_put"]
+
+
 # ── Optimizer gate integration ───────────────────────────────────────
 
 
