@@ -26,6 +26,7 @@ profiles:
       - put_spread
       - call_spread
       - iron_condor
+      - short_put
       - short_strangle
       - jade_lizard
     max_bpr_pct: 20
@@ -108,6 +109,7 @@ profiles:
       - SPY
       - QCOM
       - AAPL
+      - AMD
       - PFE
       - GS
       - TXN
@@ -127,7 +129,6 @@ profiles:
       - TSM
       - AMAT
       - GOOGL
-      - AMD
       - CRM
       - NVDA
       - AVGO
@@ -136,10 +137,18 @@ profiles:
       - MRVL
       - VRT
       - DELL
+      - HOOD
+      - INTC
+      - RBLX
+      - SMH
     allowed_structures:
       - put_spread
       - call_spread
       - iron_condor
+      - short_put
+      - jade_lizard
+      - long_call
+      - long_put
     max_bpr_pct: 8
     max_per_position_pct: 4
     max_positions: 3
@@ -147,8 +156,9 @@ profiles:
     min_option_volume: 1000
     min_open_interest: 2000
     notes: >-
-      Liquid single names only. Undefined-risk structures stay disabled here
-      until earnings/event-risk handling is stronger.
+      Liquid single names only. Shadow mode allows a wider research playbook;
+      live graduation still requires explicit review of debit/undefined-risk
+      handling and event-risk controls.
 
   - profile_id: mid_stocks
     name: "Mid-cap stocks"

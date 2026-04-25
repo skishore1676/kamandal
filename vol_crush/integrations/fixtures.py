@@ -26,8 +26,15 @@ SECTOR_MAP = {
     "QQQ": "technology",
     "IWM": "small_caps",
     "TLT": "rates",
+    "SMH": "technology",
     "GLD": "metals",
     "AAPL": "technology",
+    "AMD": "technology",
+    "GE": "industrial",
+    "HOOD": "financials",
+    "INTC": "technology",
+    "NVDA": "technology",
+    "RBLX": "communication",
     "TSLA": "consumer",
 }
 
@@ -136,6 +143,67 @@ def fetch_public_market_seed(symbol: str) -> dict[str, Any]:
         return {"symbol": symbol, "underlying_price": 0.0, "source": "unavailable"}
 
 
+def _synthetic_option_snapshots(
+    symbol: str,
+    *,
+    timestamp: str,
+    underlying_price: float,
+    iv_rank: float,
+) -> list[OptionSnapshot]:
+    """Build a small deterministic option surface for replay smoke tests.
+
+    Public quote seeds do not provide option chains. These synthetic snapshots
+    are deliberately simple and tagged as synthetic so optimizer plumbing can be
+    exercised without mistaking them for tradable quotes.
+    """
+    if underlying_price <= 0:
+        return []
+    expiry = (datetime.now(timezone.utc).date()).toordinal()
+    expiration_35 = datetime.fromordinal(expiry + 35).date().isoformat()
+    expiration_56 = datetime.fromordinal(expiry + 56).date().isoformat()
+    iv = max(iv_rank / 100.0, 0.12)
+    specs = [
+        ("call", underlying_price * 1.18, 0.18, expiration_35),
+        ("put", underlying_price * 0.82, -0.18, expiration_35),
+        ("call", underlying_price * 1.02, 0.52, expiration_56),
+        ("put", underlying_price * 0.98, -0.48, expiration_56),
+    ]
+    snapshots: list[OptionSnapshot] = []
+    for option_type, raw_strike, delta, expiration in specs:
+        strike = round(raw_strike / 5.0) * 5.0
+        intrinsic = (
+            max(underlying_price - strike, 0.0)
+            if option_type == "call"
+            else max(strike - underlying_price, 0.0)
+        )
+        extrinsic = max(underlying_price * iv * 0.035, 0.25)
+        mid = round(intrinsic + extrinsic, 2)
+        bid = round(max(mid - 0.05, 0.01), 2)
+        ask = round(mid + 0.05, 2)
+        theta = -round(max(mid * 0.015, 0.01), 4)
+        snapshots.append(
+            OptionSnapshot(
+                underlying=symbol,
+                timestamp=timestamp,
+                option_type=option_type,
+                strike=strike,
+                expiration=expiration,
+                bid=bid,
+                ask=ask,
+                last=mid,
+                greeks=Greeks(
+                    delta=delta,
+                    gamma=0.004,
+                    theta=theta,
+                    vega=round(max(underlying_price * 0.0015, 0.05), 4),
+                ),
+                implied_volatility=round(iv * 100.0, 2),
+                source="synthetic_public_seed",
+            )
+        )
+    return snapshots
+
+
 def build_fixture_payload(
     config: dict[str, Any],
 ) -> tuple[dict[str, Any], list[ReplayTrade]]:
@@ -188,21 +256,36 @@ def build_fixture_payload(
             symbol = symbol.upper()
             seed = fetch_public_market_seed(symbol)
             if symbol not in snapshots:
+                timestamp = datetime.now(timezone.utc).isoformat()
+                underlying_price = _safe_float(seed.get("underlying_price"), 100.0)
                 snapshots[symbol] = MarketSnapshot(
                     symbol=symbol,
-                    timestamp=datetime.now(timezone.utc).isoformat(),
-                    underlying_price=_safe_float(seed.get("underlying_price"), 100.0),
+                    timestamp=timestamp,
+                    underlying_price=underlying_price,
                     iv_rank=20.0,
                     realized_volatility=12.0,
                     beta_to_spy=1.0 if symbol == "SPY" else 0.9,
                     sector=SECTOR_MAP.get(symbol, "unknown"),
                     event_risk=False,
                     source=seed.get("source", "public_seed"),
+                    option_snapshots=_synthetic_option_snapshots(
+                        symbol,
+                        timestamp=timestamp,
+                        underlying_price=underlying_price,
+                        iv_rank=20.0,
+                    ),
                 )
             elif seed.get("underlying_price"):
                 snapshots[symbol].underlying_price = _safe_float(
                     seed["underlying_price"]
                 )
+                if not snapshots[symbol].option_snapshots:
+                    snapshots[symbol].option_snapshots = _synthetic_option_snapshots(
+                        symbol,
+                        timestamp=snapshots[symbol].timestamp,
+                        underlying_price=snapshots[symbol].underlying_price,
+                        iv_rank=snapshots[symbol].iv_rank,
+                    )
                 snapshots[symbol].notes.append(
                     f"underlying refreshed from {seed['source']}"
                 )

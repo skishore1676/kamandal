@@ -309,3 +309,38 @@ def test_fixture_builder_imports_gds_and_replay(tmp_path):
     assert snapshot.option_snapshots[1].expiration == "2026-05-16"
     assert bundle_path.exists()
     assert replay_path.exists()
+
+
+def test_fixture_builder_adds_synthetic_options_for_public_seed(tmp_path, monkeypatch):
+    from vol_crush.integrations import fixtures
+
+    monkeypatch.setattr(
+        fixtures,
+        "fetch_public_market_seed",
+        lambda symbol: {
+            "symbol": symbol,
+            "underlying_price": 125.0,
+            "source": "test_seed",
+        },
+    )
+    config = {
+        "data_sources": {
+            "fixtures": {
+                "import_gds_history_db": str(tmp_path / "missing.db"),
+                "import_gds_analysis_json": str(tmp_path / "missing.json"),
+                "public_seed_symbols": ["HOOD"],
+                "enable_public_seed_fetch": True,
+            }
+        }
+    }
+
+    payload, _ = build_fixture_payload(config)
+
+    snapshot = payload["market_snapshots"][0]
+    assert snapshot["symbol"] == "HOOD"
+    assert snapshot["option_snapshots"]
+    assert {item["option_type"] for item in snapshot["option_snapshots"]} == {
+        "call",
+        "put",
+    }
+    assert snapshot["option_snapshots"][0]["source"] == "synthetic_public_seed"

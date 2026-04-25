@@ -155,7 +155,7 @@ data_sources:
     replay_path: data/fixtures/replay_trades.json
     import_gds_history_db: /Users/suman/kg_env/projects/public_api_trading_v3/gds_history.db
     import_gds_analysis_json: /Users/suman/kg_env/projects/public_api_trading_v3/analysis/extracted_gds_data.json
-    public_seed_symbols: [SPY, IWM, QQQ]
+    public_seed_symbols: [SPY, IWM, QQQ, AAPL, AMD, GE, HOOD, INTC, NVDA, RBLX, SMH, TLT, TSLA]
     enable_public_seed_fetch: true
 
 idea_sources:

@@ -746,6 +746,23 @@ def _approximate_candidate(
                 side="sell",
             )
         ]
+    elif strategy_type in (StrategyType.LONG_CALL.value, StrategyType.LONG_PUT.value):
+        base = call if strategy_type == StrategyType.LONG_CALL.value else put
+        if not base:
+            return None
+        debit = idea.credit_target or base.mid
+        credit = -abs(debit)
+        greeks = replace(base.greeks)
+        bpr = abs(debit) * 100
+        legs = [
+            OptionLeg(
+                underlying=idea.underlying,
+                expiration=idea.expiration or base.expiration,
+                strike=base.strike,
+                option_type=base.option_type,
+                side="buy",
+            )
+        ]
     elif strategy_type == StrategyType.SHORT_STRANGLE.value:
         if not put:
             return None
@@ -852,6 +869,50 @@ def _approximate_candidate(
                     ),
                 ]
             )
+    elif strategy_type == StrategyType.JADE_LIZARD.value:
+        if not put:
+            return None
+        call = _pick_option(
+            snapshot,
+            "call",
+            delta_range=strategy.filters.delta_range,
+            dte_range=strategy.filters.dte_range,
+            expiration=put.expiration,
+        )
+        if not call:
+            return None
+        width = strategy.filters.spread_width or 5.0
+        credit = credit or (put.mid + call.mid * 0.5)
+        greeks = Greeks(
+            delta=put.greeks.delta + call.greeks.delta * 0.5,
+            gamma=put.greeks.gamma + call.greeks.gamma * 0.5,
+            theta=put.greeks.theta + call.greeks.theta * 0.5,
+            vega=put.greeks.vega + call.greeks.vega * 0.5,
+        )
+        bpr = max(put.strike * 100 * 0.2, width * 100)
+        legs = [
+            OptionLeg(
+                idea.underlying,
+                idea.expiration or put.expiration,
+                put.strike,
+                "put",
+                "sell",
+            ),
+            OptionLeg(
+                idea.underlying,
+                idea.expiration or call.expiration,
+                call.strike,
+                "call",
+                "sell",
+            ),
+            OptionLeg(
+                idea.underlying,
+                idea.expiration or call.expiration,
+                call.strike + width,
+                "call",
+                "buy",
+            ),
+        ]
     else:
         credit = credit or 1.0
         greeks = Greeks(delta=0.0, gamma=0.05, theta=0.06, vega=0.04)

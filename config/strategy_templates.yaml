@@ -120,8 +120,9 @@ templates:
     backtest_approved: false
     dry_run_passed: false
     consensus_notes: >-
-      Only on profiles that explicitly allow short_put (bond_etf, commodity_etf).
-      Never on single-name equities in a risk-averse book.
+      Only on profiles that explicitly allow short_put. In shadow/replay, this
+      can include liquid single names so the optimizer can study source-driven
+      ideas; live use still needs separate operator approval.
 
   - id: short_strangle_high_iv
     name: "Short strangle (high IV only)"
@@ -196,3 +197,52 @@ templates:
     consensus_notes: >-
       Contrarian play for low-IV regimes. Lower profit target and tighter
       loss management because calendars have narrower profit zones.
+
+  - id: long_call_exploratory
+    name: "Exploratory long call"
+    structure: long_call
+    description: >-
+      Shadow-only directional debit call used to let the replay/optimizer
+      evaluate bullish ideas surfaced by source intake. Kept small because long
+      premium carries negative theta and should prove itself before live use.
+    filters:
+      iv_rank_min: 0
+      dte_range: [30, 90]
+      delta_range: [0.40, 0.55]
+    management:
+      profit_target_pct: 50
+      max_loss_multiple: 1.0
+      roll_dte_trigger: 21
+      roll_for_credit: false
+      close_before_expiration: true
+    allowed_regimes: [low_iv, normal_iv, high_iv]
+    avoid_earnings: true
+    backtest_approved: false
+    dry_run_passed: false
+    consensus_notes: >-
+      Added for shadow/replay breadth. Do not graduate to live without a debit
+      trade lifecycle and explicit max-loss handling.
+
+  - id: long_put_exploratory
+    name: "Exploratory long put"
+    structure: long_put
+    description: >-
+      Shadow-only directional debit put used to evaluate bearish ideas from
+      intake. It expands the research surface without allowing undefined risk.
+    filters:
+      iv_rank_min: 0
+      dte_range: [30, 120]
+      delta_range: [0.35, 0.55]
+    management:
+      profit_target_pct: 50
+      max_loss_multiple: 1.0
+      roll_dte_trigger: 21
+      roll_for_credit: false
+      close_before_expiration: true
+    allowed_regimes: [low_iv, normal_iv, high_iv]
+    avoid_earnings: true
+    backtest_approved: false
+    dry_run_passed: false
+    consensus_notes: >-
+      Added for shadow/replay breadth. Live use should require a separate debit
+      risk policy.
